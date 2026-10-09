@@ -70,9 +70,10 @@ login. The settings page is still there, since the settings are shared by every 
 
 ## LibSharedMedia
 
-BeastXP embeds LibSharedMedia-3.0 (with LibStub and CallbackHandler-1.0) under `Libs`, so the media
-lists work on any setup. LibStub keeps whichever copy is newest, so another addon embedding the same
-libraries costs nothing extra.
+BeastXP does not bundle LibSharedMedia-3.0. On its own it lists the textures and fonts the game ships.
+For more, install any addon that registers media with LibSharedMedia, such as a SharedMedia pack or a
+UI suite that brings its own, and its textures and fonts join the lists. BeastXP looks the library up
+only when you open a list, so it finds it whichever addon loaded it.
 
 A texture or font is saved by its file path, not its LibSharedMedia name, so a choice keeps working
 however late the addon that registered it loads. If the file is gone (that addon was removed), the
@@ -80,8 +81,8 @@ bar falls back to the Blizzard texture or the Friz Quadrata font until you pick 
 
 ## Install
 
-Copy `BeastXP.toc`, `BeastXP.lua`, `BeastXP_Options.lua` and the `Libs` folder into
-`Interface\AddOns\BeastXP` in the Forever client folder, then restart the game. The game reads the
+Copy `BeastXP.toc`, `BeastXP.lua` and `BeastXP_Options.lua` into `Interface\AddOns\BeastXP` in the
+Forever client folder, then restart the game. The game reads the
 `.toc` only at startup, so a new addon, or a new file in one, is not picked up by `/reload`.
 
 ## Notes
@@ -95,9 +96,10 @@ Copy `BeastXP.toc`, `BeastXP.lua`, `BeastXP_Options.lua` and the `Libs` folder i
 
 ## Tests
 
-`npm install` once, then `npm test`. It loads every file the `.toc` lists, the embedded libraries
-included, into a Lua VM on a mocked WoW API (`tests/wow_stub.lua`) and runs `tests/spec.lua`. The
-mock is not the game, so still check the bar in the client.
+`npm install` once, then `npm test`. It loads every file the `.toc` lists into a Lua VM on a mocked
+WoW API (`tests/wow_stub.lua`) and runs `tests/spec.lua`. The mock includes a small stand-in for a
+LibSharedMedia loaded by another addon. The mock is not the game, so still check the bar in the
+client.
 
 ## Releasing
 

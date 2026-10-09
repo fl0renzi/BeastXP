@@ -396,7 +396,7 @@ test("a font file that fails to load falls back to the default font", function()
     assert_eq(BeastXPBar.text:GetText(), "Level 14   500 / 2150  (23%)")
 end)
 
--- The embedded LibSharedMedia, as the .toc loaded it.
+-- LibSharedMedia, as another addon loaded it.
 local function LSM()
     return LibStub("LibSharedMedia-3.0")
 end
@@ -409,14 +409,17 @@ local function count_named(items, name)
     return count
 end
 
-test("the embedded LibSharedMedia loads ahead of the addon", function()
+test("LibSharedMedia loaded by an addon after BeastXP is still found", function()
     __boot({ pet = hunterPet() })
-    assert_true(LibStub and LibStub("LibSharedMedia-3.0", true), "LibSharedMedia not loaded")
-    assert_eq(LSM():Fetch("statusbar", "Blizzard"), "Interface\\TargetingFrame\\UI-StatusBar")
+    assert_eq(LibStub, nil, "BeastXP brought a library of its own")
+
+    __load_libsharedmedia():Register("font", "Expressway", "Interface\\AddOns\\Media\\Expressway.ttf")
+    __script(BeastXPBar, "OnMouseUp", "RightButton")
+    assert_true(__menu_item("Font", "Expressway"), "late LibSharedMedia not found")
 end)
 
 test("LibSharedMedia fonts join the font menu without duplicates", function()
-    __boot({ pet = hunterPet() })
+    __boot({ pet = hunterPet(), libSharedMedia = true })
     LSM():Register("font", "Expressway", "Interface\\AddOns\\Media\\Expressway.ttf")
 
     __script(BeastXPBar, "OnMouseUp", "RightButton")
@@ -434,7 +437,7 @@ test("LibSharedMedia fonts join the font menu without duplicates", function()
 end)
 
 test("a long font list scrolls instead of running off the screen", function()
-    __boot({ pet = hunterPet() })
+    __boot({ pet = hunterPet(), libSharedMedia = true })
     for i = 1, 30 do
         LSM():Register("font", ("Font %02d"):format(i), ("Interface\\AddOns\\Media\\Font%02d.ttf"):format(i))
     end
@@ -462,7 +465,7 @@ test("picking a texture retextures the fill and the track at once", function()
 end)
 
 test("textures another addon registers, even after login, are listed", function()
-    __boot({ pet = hunterPet() })
+    __boot({ pet = hunterPet(), libSharedMedia = true })
     LSM():Register("statusbar", "Skullflower", "Interface\\AddOns\\FlorenziMedia\\textures\\Skullflower.tga")
 
     __script(BeastXPBar, "OnMouseUp", "RightButton")
@@ -485,7 +488,7 @@ test("a saved texture that no longer loads falls back to Blizzard", function()
 end)
 
 test("the menu still works without LibSharedMedia", function()
-    __boot({ pet = hunterPet(), noLibs = true })
+    __boot({ pet = hunterPet() })
     assert_eq(LibStub, nil)
     __script(BeastXPBar, "OnMouseUp", "RightButton")
     assert_eq(#__menu_item("Texture").children, 3)
@@ -872,7 +875,7 @@ end)
 --------------------------------------------------------------------------------
 
 test("slash commands change the same settings", function()
-    __boot({ pet = hunterPet() })
+    __boot({ pet = hunterPet(), libSharedMedia = true })
     SlashCmdList.BEASTXP("size 14")
     assert_eq(BeastXPDB.fontSize, 14)
     SlashCmdList.BEASTXP("size 99")

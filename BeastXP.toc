@@ -5,7 +5,7 @@
 ## Version: @project-version@
 ## IconTexture: Interface\Icons\Ability_Hunter_BeastTraining
 ## SavedVariables: BeastXPDB
-## X-Embeds: LibStub, CallbackHandler-1.0, LibSharedMedia-3.0
+## OptionalDeps: LibSharedMedia-3.0
 ## X-Curse-Project-ID: 1735612
 
 # BeastXP targets World of Warcraft: Forever only, whose toc is 16001.
@@ -17,14 +17,10 @@
 # The settings are account-wide on purpose: the Forever client writes a
 # per-character SavedVariables file but never loads it back.
 #
-# LibSharedMedia is embedded so its textures and fonts are there on any
-# setup. LibStub keeps whichever copy is newest, so another addon embedding
-# the same libraries costs nothing extra. The libraries never touch
-# BeastXPDB, so they may load ahead of the client gate in BeastXP.lua.
-
-Libs\LibStub\LibStub.lua
-Libs\CallbackHandler-1.0\CallbackHandler-1.0.lua
-Libs\LibSharedMedia-3.0\LibSharedMedia-3.0.lua
+# LibSharedMedia is not embedded. Any addon that registers textures or fonts
+# loads it, and BeastXP looks it up only when a media list is wanted, so that
+# media is listed whichever addon loaded it and whenever. OptionalDeps only
+# puts a standalone LibSharedMedia ahead of BeastXP.
 
 BeastXP.lua
 BeastXP_Options.lua

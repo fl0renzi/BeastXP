@@ -63,13 +63,6 @@ function strtrim(s)
     return (s:gsub("^%s+", ""):gsub("%s+$", ""))
 end
 
--- What the embedded libraries take from the client.
-strmatch = string.match
-bit = { band = function(a, b) return a & b end }
-function getfenv() return _G end
-function GetLocale() return "enUS" end
-function securecallfunction(func, ...) return func(...) end
-
 --------------------------------------------------------------------------------
 -- Game state the tests drive
 --------------------------------------------------------------------------------
@@ -562,10 +555,47 @@ local DEFAULT_EVENTS = {
     "PET_UI_UPDATE", "PLAYER_XP_UPDATE", "PLAYER_ENTERING_WORLD", "PLAYER_REGEN_ENABLED",
 }
 
+-- LibSharedMedia as another addon loads it: LibStub, and the part of the
+-- library BeastXP reads. It starts with a few of the real library's own
+-- entries, which repeat the built-in media by file or by name, and a test
+-- registers more. Returns the library.
+function __load_libsharedmedia()
+    local media = {}
+    local lsm = {}
+    function lsm:Register(kind, name, path)
+        media[kind] = media[kind] or {}
+        media[kind][name] = path
+        return true
+    end
+    function lsm:HashTable(kind) return media[kind] end
+    function lsm:List(kind)
+        local names = {}
+        for name in pairs(media[kind] or {}) do names[#names + 1] = name end
+        table.sort(names)
+        return names
+    end
+
+    lsm:Register("statusbar", "Blizzard", "Interface\\TargetingFrame\\UI-StatusBar")
+    lsm:Register("statusbar", "Blizzard Raid Bar", "Interface\\RaidFrame\\Raid-Bar-Hp-Fill")
+    lsm:Register("statusbar", "Solid", "Interface\\Buttons\\WHITE8X8")
+    lsm:Register("font", "Arial Narrow", "Fonts\\ARIALN.TTF")
+    lsm:Register("font", "Friz Quadrata TT", "Fonts\\FRIZQT__.TTF")
+    lsm:Register("font", "Morpheus", "Fonts\\MORPHEUS_CYR.TTF")
+    lsm:Register("font", "Nimrod MT", "Fonts\\NIM_____.ttf")
+
+    LibStub = setmetatable({}, {
+        __call = function(_, major, silent)
+            if major == "LibSharedMedia-3.0" then return lsm end
+            if not silent then error("no library " .. tostring(major)) end
+        end,
+    })
+    return lsm
+end
+
 -- Starts a fresh session: a clean world, the given saved settings, every file
--- the .toc lists loaded in order as the game loads them (noLibs leaves out the
--- embedded libraries), and (unless told not to) PLAYER_LOGIN fired. Returns
--- the addon's namespace.
+-- the .toc lists loaded in order as the game loads them (after another addon's
+-- LibSharedMedia, with libSharedMedia), and (unless told not to) PLAYER_LOGIN
+-- fired. Returns the addon's namespace.
 function __boot(options)
     options = options or {}
     resetGlobals()
@@ -584,13 +614,13 @@ function __boot(options)
     BeastXPBar = nil
     if options.noSettings then Settings = nil end
 
+    if options.libSharedMedia then __load_libsharedmedia() end
+
     local ns = {}
     for _, entry in ipairs(__toc_files) do
-        if not (options.noLibs and entry.file:find("^Libs")) then
-            local chunk, err = load(entry.source, "=" .. entry.file)
-            if not chunk then error(err) end
-            chunk("BeastXP", ns)
-        end
+        local chunk, err = load(entry.source, "=" .. entry.file)
+        if not chunk then error(err) end
+        chunk("BeastXP", ns)
     end
 
     if options.login ~= false then __fire("PLAYER_LOGIN") end

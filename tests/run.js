@@ -1,6 +1,6 @@
 // BeastXP - tests/run.js
 // Loads the mocked WoW API into a fengari (Lua 5.3) VM, hands it every file
-// the .toc lists (the embedded libraries and the addon, in load order), then
+// the .toc lists (in load order), then
 // runs tests/spec.lua, which boots the addon once per scenario. Nothing here
 // ships with the addon.
 
@@ -30,8 +30,7 @@ function run(file) {
   }
 }
 
-// The addon's own files must be plain ASCII. The embedded libraries are
-// upstream code and are left exactly as published.
+// The addon's files must be plain ASCII.
 for (const file of ["BeastXP.lua", "BeastXP_Options.lua", "BeastXP.toc"]) {
   const text = fs.readFileSync(path.join(root, file), "utf8");
   const line = text.split(/\r?\n/).findIndex((entry) => /[^\x00-\x7F]/.test(entry));

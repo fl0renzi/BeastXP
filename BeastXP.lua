@@ -2,9 +2,9 @@
 -- One borderless bar for the hunter pet's experience, in the purple the game
 -- draws experience in. Drag the bar to move it, drag the grip in its corner
 -- to resize it, and right-click it for the lock, the texture, the font, the
--- font size and the outline. Textures and fonts come from LibSharedMedia as
--- well as the client. /beastxp, or /petxp for short, offers the same options
--- as slash commands.
+-- font size and the outline. Textures and fonts come from the client, and from
+-- LibSharedMedia when another addon has loaded it. /beastxp, or /petxp for
+-- short, offers the same options as slash commands.
 --
 -- Cost: the bar is built the first time there is something to show, and it is
 -- refreshed from the pet events only, never from OnUpdate. A character that is
@@ -74,10 +74,10 @@ local TRACK_ALPHA = 0.25
 local LABEL_COLOR = { 1.0, 0.82, 0.0 }
 local HINT_COLOR  = { 0.5, 0.5, 0.5 }
 
--- The media every client ships. LibSharedMedia (embedded under Libs) adds
--- whatever other addons register with it. A choice is saved by its path, not
--- by its LibSharedMedia name, so it keeps working whichever addon registered
--- it and whenever it did.
+-- The media every client ships. LibSharedMedia, which BeastXP does not embed,
+-- adds whatever other addons register with it. A choice is saved by its path,
+-- not by its LibSharedMedia name, so it keeps working whichever addon
+-- registered it and whenever it did.
 local BUILTIN_FONTS = {
     { name = "Friz Quadrata", path = "Fonts\\FRIZQT__.TTF" },
     { name = "Arial Narrow",  path = "Fonts\\ARIALN.TTF" },
@@ -640,8 +640,9 @@ end
 -- Every choice of one kind of media ("font" or "statusbar"): the built-in
 -- ones first, then whatever LibSharedMedia knows that is not one of them by
 -- file or by name (it has its own Morpheus, in another file). Built when the
--- menu opens or a slash command asks, so media another addon registers late
--- is still there, and the list costs nothing until it is wanted.
+-- menu opens or a slash command asks, so LibSharedMedia is found whichever
+-- addon loaded it, and media registered late is still there. The list costs
+-- nothing until it is wanted.
 local function MediaChoices(mediaType, builtins)
     local choices, seenPath, seenName = {}, {}, {}
     for _, entry in ipairs(builtins) do
