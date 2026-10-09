@@ -16,7 +16,8 @@ jobs:
       # Without CF_API_TOKEN or the toc's X-Curse-Project-ID the packager skips
       # CurseForge and only makes the GitHub release.
       CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
-      GH_API_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # packager@v2 does not read GH_API_TOKEN yet; both versions read this.
+      GITHUB_API_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - uses: actions/checkout@v7
         with:
