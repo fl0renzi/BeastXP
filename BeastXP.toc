@@ -1,0 +1,29 @@
+## Interface: 16001
+## Title: BeastXP
+## Notes: A small bar for your hunter pet's experience. Drag to move, drag the corner to resize, right-click or /petxp for the settings.
+## Author: Florenzi
+## Version: 1.0.0
+## IconTexture: Interface\Icons\Ability_Hunter_BeastTraining
+## SavedVariables: BeastXPDB
+## X-Embeds: LibStub, CallbackHandler-1.0, LibSharedMedia-3.0
+
+# BeastXP targets World of Warcraft: Forever only, whose toc is 16001.
+# Check the live value in game with
+#   /run print((select(4, GetBuildInfo())))
+# before changing the line above, and change FOREVER_INTERFACE in
+# BeastXP.lua with it.
+#
+# The settings are account-wide on purpose: the Forever client writes a
+# per-character SavedVariables file but never loads it back.
+#
+# LibSharedMedia is embedded so its textures and fonts are there on any
+# setup. LibStub keeps whichever copy is newest, so another addon embedding
+# the same libraries costs nothing extra. The libraries never touch
+# BeastXPDB, so they may load ahead of the client gate in BeastXP.lua.
+
+Libs\LibStub\LibStub.lua
+Libs\CallbackHandler-1.0\CallbackHandler-1.0.lua
+Libs\LibSharedMedia-3.0\LibSharedMedia-3.0.lua
+
+BeastXP.lua
+BeastXP_Options.lua
