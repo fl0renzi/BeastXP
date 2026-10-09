@@ -181,6 +181,7 @@ local function RefreshPage()
     local db = API.GetDB()
     refreshing = true
     controls.lock:SetChecked(db.locked)
+    controls.tooltip:SetChecked(db.showTooltip)
     controls.width:SetValue(db.width)
     controls.height:SetValue(db.height)
     controls.fontSize:SetValue(db.fontSize)
@@ -237,6 +238,9 @@ local function BuildBarSection()
 
     controls.lock = Checkbox(Row("Lock bar"), API.SetLocked)
     Tooltip(controls.lock, "A locked bar cannot be moved or resized, and hides while no pet is out.")
+
+    controls.tooltip = Checkbox(Row("Show tooltip"), API.SetShowTooltip)
+    Tooltip(controls.tooltip, "Hovering over the bar shows your pet's name and the experience it still needs.")
 
     controls.width = Slider(Row("Width"), API.MIN_WIDTH, API.MaxWidth(), function(value)
         API.SetBarSize(value, API.GetDB().height)

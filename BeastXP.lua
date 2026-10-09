@@ -117,6 +117,7 @@ local DEFAULTS = {
     width       = DEFAULT_WIDTH,
     height      = DEFAULT_HEIGHT,
     locked      = false,
+    showTooltip = true,
     texturePath = "Interface\\TargetingFrame\\UI-StatusBar",
     fontPath    = "Fonts\\FRIZQT__.TTF",
     fontSize    = 11,
@@ -288,7 +289,9 @@ local function BarText()
     return FormatText(db.textStyle, pet.present, pet.level, pet.current, pet.max)
 end
 
+-- With Show tooltip off, hovering the bar or its grip shows nothing.
 local function ShowTooltip(owner)
+    if not db.showTooltip then return end
     GameTooltip:SetOwner(owner, "ANCHOR_TOP")
 
     if pet.present then
@@ -458,6 +461,7 @@ local function EnsureBar()
     end)
     grip:SetScript("OnMouseUp", StopMoving)
     grip:SetScript("OnEnter", function(self)
+        if not db.showTooltip then return end
         GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
         GameTooltip:AddLine("Drag to resize", 1, 1, 1)
         GameTooltip:Show()
@@ -523,6 +527,17 @@ local function SetLocked(locked)
     db.locked = locked and true or false
     if bar then ApplyLock() end
     Refresh()
+    NotifyChanged()
+end
+
+-- Turning the tooltip off also puts away one that is up, say when the command
+-- is typed with the mouse over the bar.
+local function SetShowTooltip(show)
+    db.showTooltip = show and true or false
+    if not db.showTooltip and bar and GameTooltip:IsShown() then
+        local owner = GameTooltip:GetOwner()
+        if owner == bar or owner == bar.grip then GameTooltip:Hide() end
+    end
     NotifyChanged()
 end
 
@@ -690,6 +705,9 @@ function ShowMenu(owner)
         root:CreateCheckbox("Lock bar",
             function() return db.locked end,
             function() SetLocked(not db.locked) end)
+        root:CreateCheckbox("Show tooltip",
+            function() return db.showTooltip end,
+            function() SetShowTooltip(not db.showTooltip) end)
 
         AddMediaMenu(root, "Texture", TextureChoices(), "texturePath", SetTexturePath)
 
@@ -741,6 +759,7 @@ local HELP = {
     "/petxp - open the settings page (also under Options, AddOns)",
     "/petxp lock - lock the bar (it hides while no pet is out)",
     "/petxp unlock - unlock it to move and resize it",
+    "/petxp tooltip on | off - the tooltip when you hover over the bar",
     "/petxp texture <name> - for example blizzard, solid or a LibSharedMedia texture",
     "/petxp color - pick the bar color, or give purple | blue | green | a hex code like 33aaff",
     "/petxp text full | short | level | percent | none - how much the bar says",
@@ -809,6 +828,14 @@ SlashCmdList["BEASTXP"] = function(msg)
     elseif command == "lock" or command == "unlock" then
         SetLocked(command == "lock")
         Print(db.locked and "bar locked." or "bar unlocked: drag it to move it, drag its corner to resize it.")
+    elseif command == "tooltip" then
+        if word == "on" or word == "off" then
+            SetShowTooltip(word == "on")
+            Print(db.showTooltip and "tooltip on: hover over the bar for your pet's details."
+                or "tooltip off: hovering over the bar shows nothing.")
+        else
+            Print("use /petxp tooltip on or /petxp tooltip off.")
+        end
     elseif command == "texture" then
         local texture = FindMedia(TextureChoices(), word)
         if texture then
@@ -897,6 +924,7 @@ ns.API = {
     end,
 
     SetLocked = SetLocked,
+    SetShowTooltip = SetShowTooltip,
     SetBarSize = SetBarSize,
     SetTexturePath = SetTexturePath,
     SetBarColor = SetBarColor,

@@ -132,6 +132,39 @@ test("the tooltip names the pet and the experience to the next level", function(
     assert_false(GameTooltip:IsShown(), "tooltip still up")
 end)
 
+test("with the tooltip off, hovering the bar or its grip shows nothing", function()
+    __boot({ pet = hunterPet() })
+    assert_eq(BeastXPDB.showTooltip, true, "a fresh install has no tooltip")
+
+    -- Turning it off while the tooltip is up puts it away.
+    __script(BeastXPBar, "OnEnter")
+    assert_true(GameTooltip:IsShown(), "no tooltip while on")
+    SlashCmdList.BEASTXP("tooltip off")
+    assert_eq(BeastXPDB.showTooltip, false)
+    assert_false(GameTooltip:IsShown(), "tooltip left up after turning it off")
+    assert_true(__printed("tooltip off"), "no confirmation")
+
+    __script(BeastXPBar, "OnEnter")
+    assert_false(GameTooltip:IsShown(), "bar tooltip shown while off")
+    __fire("UNIT_PET_EXPERIENCE", "pet")
+    assert_false(GameTooltip:IsShown(), "a refresh brought the tooltip back")
+    __script(BeastXPBar.grip, "OnEnter")
+    assert_false(GameTooltip:IsShown(), "grip tooltip shown while off")
+
+    SlashCmdList.BEASTXP("tooltip maybe")
+    assert_eq(BeastXPDB.showTooltip, false, "a bad word changed the setting")
+    assert_true(__printed("use /petxp tooltip on"), "no usage for a bad word")
+
+    SlashCmdList.BEASTXP("tooltip on")
+    __script(BeastXPBar, "OnEnter")
+    assert_true(has_line(GameTooltip.__lines, "Grimtooth"), "tooltip not back after turning it on")
+
+    -- The choice is saved.
+    __boot({ pet = hunterPet(), db = { showTooltip = false } })
+    __script(BeastXPBar, "OnEnter")
+    assert_false(GameTooltip:IsShown(), "saved choice not kept")
+end)
+
 --------------------------------------------------------------------------------
 -- When the bar shows at all
 --------------------------------------------------------------------------------
@@ -332,6 +365,19 @@ test("the menu's lock entry and reset entry work", function()
 
     __menu_click(__menu_item("Reset position and size"))
     assert_eq(BeastXPBar:GetWidth(), 240)
+end)
+
+test("the menu's Show tooltip entry turns the tooltip off and on", function()
+    __boot({ pet = hunterPet() })
+    __script(BeastXPBar, "OnMouseUp", "RightButton")
+    local item = __menu_item("Show tooltip")
+    assert_true(item, "no tooltip entry")
+    assert_true(__menu_selected(item), "not ticked on a fresh install")
+    __menu_click(item)
+    assert_false(BeastXPDB.showTooltip, "not turned off")
+    assert_false(__menu_selected(item))
+    __menu_click(item)
+    assert_true(BeastXPDB.showTooltip, "not turned back on")
 end)
 
 test("a font file that fails to load falls back to the default font", function()
@@ -663,10 +709,12 @@ test("the page shows the current settings when it opens", function()
         db = {
             locked = true, width = 300, height = 20, fontSize = 14, outline = "OUTLINE",
             texturePath = "Interface\\Buttons\\WHITE8X8", barColor = { 0.0, 0.39, 0.88 }, textStyle = "short",
+            showTooltip = false,
         },
     })
     open_page()
     assert_true(__control("Lock bar", "UICheckButtonTemplate"):GetChecked(), "lock not ticked")
+    assert_false(__control("Show tooltip", "UICheckButtonTemplate"):GetChecked(), "tooltip ticked")
     assert_eq(__control("Width", "MinimalSliderWithSteppersTemplate"):GetValue(), 300)
     assert_eq(__control("Height", "MinimalSliderWithSteppersTemplate"):GetValue(), 20)
     assert_eq(__control("Font size", "MinimalSliderWithSteppersTemplate"):GetValue(), 14)
@@ -688,6 +736,14 @@ test("every control on the page changes the bar at once", function()
     __script(lock, "OnClick")
     assert_true(BeastXPDB.locked, "lock box did not lock")
     assert_false(BeastXPBar.grip:IsShown(), "grip still shown")
+
+    local tooltip = __control("Show tooltip", "UICheckButtonTemplate")
+    assert_true(tooltip:GetChecked(), "tooltip box not ticked on a fresh install")
+    tooltip:SetChecked(false)
+    __script(tooltip, "OnClick")
+    assert_false(BeastXPDB.showTooltip, "tooltip box did not turn it off")
+    __script(BeastXPBar, "OnEnter")
+    assert_false(GameTooltip:IsShown(), "tooltip shown after the box turned it off")
 
     __control("Width", "MinimalSliderWithSteppersTemplate"):SetValue(320)
     assert_eq(BeastXPDB.width, 320)
@@ -733,6 +789,10 @@ test("a change made elsewhere shows on the open page, without calling back", fun
     SlashCmdList.BEASTXP("texture solid")
     assert_eq(__dropdown_text(__control("Texture", "WowStyle1DropdownTemplate")), "Solid")
 
+    SlashCmdList.BEASTXP("tooltip off")
+    assert_false(__control("Show tooltip", "UICheckButtonTemplate"):GetChecked(), "tooltip box still ticked")
+    assert_eq(BeastXPDB.showTooltip, false, "the box's refresh turned the tooltip back on")
+
     -- Dragging the bar's corner moves the sliders too.
     __script(BeastXPBar.grip, "OnMouseDown", "LeftButton")
     BeastXPBar:SetSize(410, 30)
@@ -765,7 +825,7 @@ test("Defaults takes two clicks and leaves the bar where it is", function()
     __boot({
         pet = hunterPet(),
         db = { point = "TOP", relativePoint = "TOP", x = 10, y = -50, width = 400, fontSize = 20,
-            textStyle = "percent", barColor = { 1, 0, 0 }, locked = true },
+            textStyle = "percent", barColor = { 1, 0, 0 }, locked = true, showTooltip = false },
     })
     open_page()
     local defaults = __page_button("Defaults")
@@ -786,6 +846,7 @@ test("Defaults takes two clicks and leaves the bar where it is", function()
     assert_eq(BeastXPDB.width, 240)
     assert_eq(BeastXPDB.textStyle, "full")
     assert_eq(BeastXPDB.locked, false)
+    assert_eq(BeastXPDB.showTooltip, true)
     assert_color(BeastXPBar.status, 0.58, 0.0, 0.55, "colour")
     assert_eq(BeastXPDB.point, "TOP", "Defaults moved the bar")
     assert_eq(BeastXPDB.y, -50)
@@ -863,8 +924,9 @@ test("broken saved settings fall back to the defaults", function()
     __boot({
         pet = hunterPet(),
         db = { point = 5, x = "a", width = "wide", fontSize = 500, outline = "GLOW", locked = "yes", fontPath = 7,
-            texturePath = false },
+            texturePath = false, showTooltip = "no" },
     })
+    assert_eq(BeastXPDB.showTooltip, true)
     assert_eq(BeastXPDB.texturePath, "Interface\\TargetingFrame\\UI-StatusBar")
     assert_eq(BeastXPDB.point, nil)
     assert_eq(BeastXPDB.width, 240)

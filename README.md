@@ -5,7 +5,7 @@ A single bar for your hunter pet's experience, for World of Warcraft: Forever. N
 The bar has no border: just a thin dark backing behind the fill, in the purple the game draws
 experience in. It shows the pet's level, its experience into the level and the percentage, for
 example `Level 14   340 / 2150  (15%)`. Hover it for the pet's name and the experience it still
-needs.
+needs, unless you turn the tooltip off.
 
 ## Settings page
 
@@ -15,7 +15,7 @@ QuestForever lay out theirs:
 
 - **Preview**: a copy of the bar, since the settings window usually covers the real one. It shows
   your pet when one is out and a sample pet otherwise.
-- **Bar**: *Lock bar*, *Width* and *Height* sliders, *Texture*, *Color* (click the swatch for the
+- **Bar**: *Lock bar*, *Show tooltip*, *Width* and *Height* sliders, *Texture*, *Color* (click the swatch for the
   color picker, or pick a preset), and *Reset position*.
 - **Text**: the text style, *Font*, a *Font size* slider and *Outline*.
 - **Defaults** (top right) puts every setting back to how a fresh install has it, but leaves the bar
@@ -44,6 +44,8 @@ The bar starts **unlocked** on a fresh install, so you can put it where you want
 - **Lock**: right-click the bar and tick *Lock bar*. A locked bar cannot be moved or resized, hides
   its grip, and hides itself while no pet is out. While it is unlocked it stays on screen even without
   a pet, so you can place it.
+- **Tooltip**: right-click the bar and untick *Show tooltip*, and hovering over the bar or its grip
+  shows nothing. It is on for a fresh install.
 
 The same options as slash commands, under `/beastxp` or `/petxp` for short. A texture or font is
 found by its name or any part of it:
@@ -52,6 +54,7 @@ found by its name or any part of it:
 /petxp                    opens the settings page
 /petxp help               lists these commands
 /petxp lock | unlock
+/petxp tooltip on | off
 /petxp texture <name>     for example: blizzard, solid, skills
 /petxp color              opens the color picker
 /petxp color <color>      purple | blue | green | reset | a hex code like 33aaff
