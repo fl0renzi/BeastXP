@@ -103,7 +103,8 @@ client.
 
 ## Releasing
 
-Push a tag such as `v1.0.1`. The release workflow (`.github/workflows/release.yml`) runs the tests,
+Add the release's notes to `CHANGELOG.md`, which becomes the file's changelog on CurseForge, then
+push a tag such as `v1.0.1`. Neither the changelog nor this readme goes into the zip. The release workflow (`.github/workflows/release.yml`) runs the tests,
 then the BigWigs packager builds the zip from `.pkgmeta`, writes the tag into the toc's `Version`,
 and publishes it as a GitHub release and to CurseForge under the Forever flavor. A tag containing
 `alpha` or `beta` is uploaded as that release type. CurseForge needs the `CF_API_TOKEN` repository
