@@ -101,5 +101,5 @@ mock is not the game, so still check the bar in the client.
 Push a tag such as `v1.0.1`. The release workflow (`.github/workflows/release.yml`) runs the tests,
 then the BigWigs packager builds the zip from `.pkgmeta`, writes the tag into the toc's `Version`,
 and publishes it as a GitHub release and to CurseForge under the Forever flavor. A tag containing
-`alpha` or `beta` is uploaded as that release type. CurseForge needs the `CF_API_KEY` repository
+`alpha` or `beta` is uploaded as that release type. CurseForge needs the `CF_API_TOKEN` repository
 secret and the toc's `X-Curse-Project-ID`; without them the packager only makes the GitHub release.

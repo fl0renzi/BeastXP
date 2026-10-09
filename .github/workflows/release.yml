@@ -13,10 +13,10 @@ jobs:
     permissions:
       contents: write # lets the packager create the GitHub release
     env:
-      # Without CF_API_KEY or the toc's X-Curse-Project-ID the packager skips
+      # Without CF_API_TOKEN or the toc's X-Curse-Project-ID the packager skips
       # CurseForge and only makes the GitHub release.
-      CF_API_KEY: ${{ secrets.CF_API_KEY }}
-      GITHUB_OAUTH: ${{ secrets.GITHUB_TOKEN }}
+      CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+      GH_API_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - uses: actions/checkout@v7
         with:
