@@ -4,8 +4,9 @@ A single bar for your hunter pet's experience, for World of Warcraft: Forever. N
 
 The bar has no border: just a thin dark backing behind the fill, in the purple the game draws
 experience in. It shows the pet's level, its experience into the level and the percentage, for
-example `Level 14   340 / 2150  (15%)`. Hover it for the pet's name and the experience it still
-needs, unless you turn the tooltip off.
+example `Level 14   340 / 2150  (15%)`. Hover it for the pet's name, the experience it still
+needs, its loyalty rank (and whether it is gaining or losing loyalty) and its unspent training
+points, unless you turn the tooltip off.
 
 ## Settings page
 
@@ -15,9 +16,10 @@ QuestForever lay out theirs:
 
 - **Preview**: a copy of the bar, since the settings window usually covers the real one. It shows
   your pet when one is out and a sample pet otherwise.
-- **Bar**: *Lock bar*, *Show tooltip*, *Width* and *Height* sliders, *Texture*, *Color* (click the swatch for the
-  color picker, or pick a preset), and *Reset position*.
-- **Text**: the text style, *Font*, a *Font size* slider and *Outline*.
+- **Bar**: *Lock bar*, *Show tooltip*, *Width* and *Height* sliders, *Texture*, *Color* (click the
+  swatch for the color picker, or pick a preset), and *Reset position*.
+- **Text**: the text style, *Loyalty* and *Training points*, *Font*, a *Font size* slider and
+  *Outline*.
 - **Defaults** (top right) puts every setting back to how a fresh install has it, but leaves the bar
   where it is. It asks for a second click first.
 
@@ -38,7 +40,9 @@ The bar starts **unlocked** on a fresh install, so you can put it where you want
   color as you drag, and Cancel puts the old one back.
 - **Text**: right-click the bar and pick how much it says under *Text*. Each entry shows an example:
   `Level 14   1290 / 2150  (60%)`, `14  1290/2150  60%`, `14  60%`, `60%`, or no text at all. The
-  short style writes large numbers as `12.3k`.
+  short style writes large numbers as `12.3k`. Tick *Loyalty* or *Training points* in the same menu
+  to add the pet's loyalty rank or its unspent training points after the text, for example
+  `15%  Faithful  25 TP`. Both are off for a fresh install, and *No text* leaves them out too.
 - **Font**: right-click the bar for the font, the font size and the outline. The four fonts the game
   ships are always listed, along with every LibSharedMedia font.
 - **Lock**: right-click the bar and tick *Lock bar*. A locked bar cannot be moved or resized, hides
@@ -59,6 +63,8 @@ found by its name or any part of it:
 /petxp color              opens the color picker
 /petxp color <color>      purple | blue | green | reset | a hex code like 33aaff
 /petxp text <style>       full | short | level | percent | none
+/petxp loyalty on | off   the loyalty rank after the text
+/petxp training on | off  unspent training points after the text (tp works too)
 /petxp font <name>        for example: friz, arial, morpheus
 /petxp size 6-32
 /petxp outline none | outline | thick
@@ -81,8 +87,8 @@ bar falls back to the Blizzard texture or the Friz Quadrata font until you pick 
 
 ## Install
 
-Copy `BeastXP.toc`, `BeastXP.lua` and `BeastXP_Options.lua` into `Interface\AddOns\BeastXP` in the
-Forever client folder, then restart the game. The game reads the
+Install it from CurseForge, or copy `BeastXP.toc`, `BeastXP.lua` and `BeastXP_Options.lua` into
+`Interface\AddOns\BeastXP` in the Forever client folder, then restart the game. The game reads the
 `.toc` only at startup, so a new addon, or a new file in one, is not picked up by `/reload`.
 
 ## Notes
@@ -93,6 +99,10 @@ Forever client folder, then restart the game. The game reads the
   SavedVariables file but never loads it back. Every setting applies immediately, with no reload.
 - Event-driven: the bar refreshes on `UNIT_PET`, `UNIT_PET_EXPERIENCE`, `UNIT_LEVEL`,
   `PET_UI_UPDATE`, `PLAYER_XP_UPDATE` and `PLAYER_ENTERING_WORLD`, never from `OnUpdate`.
+  `UNIT_HAPPINESS` and `UNIT_PET_TRAINING_POINTS` keep loyalty and training points current, on the
+  bar and in an open tooltip.
+- Loyalty and training points come from `C_PetInfo`, read the way the game's own pet panel and
+  trainer read them. Whatever the client does not report is left out, on the bar and in the tooltip.
 
 ## Tests
 
@@ -104,9 +114,9 @@ client.
 ## Releasing
 
 Add the release's notes to `CHANGELOG.md`, which becomes the file's changelog on CurseForge, then
-push a tag such as `v1.0.1`. Neither the changelog nor this readme goes into the zip. The release
+push a tag such as `v1.1.0`. Neither the changelog nor this readme goes into the zip. The release
 workflow (`.github/workflows/release.yml`) runs the tests, then the BigWigs packager builds the zip
 from `.pkgmeta`, writes the tag into the toc's `Version`, and publishes it as a GitHub release and
-to CurseForge under the Forever flavor. A tag containing
-`alpha` or `beta` is uploaded as that release type. CurseForge needs the `CF_API_TOKEN` repository
-secret and the toc's `X-Curse-Project-ID`; without them the packager only makes the GitHub release.
+to CurseForge under the Forever flavor. A tag containing `alpha` or `beta` is uploaded as that
+release type. CurseForge needs the `CF_API_TOKEN` repository secret and the toc's
+`X-Curse-Project-ID`; without them the packager only makes the GitHub release.

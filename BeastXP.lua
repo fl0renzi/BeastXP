@@ -70,9 +70,12 @@ local COLOR_PRESETS = {
 -- The empty part of the bar is the bar colour at this opacity.
 local TRACK_ALPHA = 0.25
 
--- The colours the game's own tooltips use for a label and for a hint line.
+-- The colours the game's own tooltips use for a label, for a hint line, and
+-- for good and bad news.
 local LABEL_COLOR = { 1.0, 0.82, 0.0 }
 local HINT_COLOR  = { 0.5, 0.5, 0.5 }
+local GAIN_COLOR  = { 0.1, 1.0, 0.1 }
+local LOSS_COLOR  = { 1.0, 0.1, 0.1 }
 
 -- The media every client ships. LibSharedMedia, which BeastXP does not embed,
 -- adds whatever other addons register with it. A choice is saved by its path,
@@ -114,15 +117,18 @@ local TEXT_STYLES = {
 }
 
 local DEFAULTS = {
-    width       = DEFAULT_WIDTH,
-    height      = DEFAULT_HEIGHT,
-    locked      = false,
-    showTooltip = true,
-    texturePath = "Interface\\TargetingFrame\\UI-StatusBar",
-    fontPath    = "Fonts\\FRIZQT__.TTF",
-    fontSize    = 11,
-    outline     = "",
-    textStyle   = "full",
+    width        = DEFAULT_WIDTH,
+    height       = DEFAULT_HEIGHT,
+    locked       = false,
+    showTooltip  = true,
+    texturePath  = "Interface\\TargetingFrame\\UI-StatusBar",
+    fontPath     = "Fonts\\FRIZQT__.TTF",
+    fontSize     = 11,
+    outline      = "",
+    textStyle    = "full",
+    -- What the bar's text adds after its style.
+    textLoyalty  = false,
+    textTraining = false,
 }
 
 --------------------------------------------------------------------------------
@@ -260,8 +266,7 @@ end
 
 -- A pet's text in the given style (see TEXT_STYLES). Any part the game did not
 -- report, the level or the experience, is left out rather than shown as 0.
--- The settings preview formats its sample pet through here too.
-local function FormatText(style, present, level, current, max)
+local function StyleText(style, present, level, current, max)
     if style == "none" then return "" end
     if not present then return "No pet" end
 
@@ -285,8 +290,58 @@ local function FormatText(style, present, level, current, max)
     return text
 end
 
+-- The style's text with the loyalty rank and the training points after it,
+-- when they are given, spaced the way the style spaces its own parts. No text
+-- stays no text. The settings preview formats its sample pet through here too.
+local function FormatText(style, present, level, current, max, loyalty, points)
+    local text = StyleText(style, present, level, current, max)
+    if style == "none" or not present then return text end
+
+    local gap = style == "full" and "   " or "  "
+    if loyalty then
+        text = (text ~= "" and text .. gap or "") .. loyalty
+    end
+    if points then
+        text = (text ~= "" and text .. gap or "") .. ("%d TP"):format(points)
+    end
+    return text
+end
+
+-- Loyalty and training points, read the way the game's own pet panel and
+-- trainer read them, when the tooltip is drawn or the bar's text includes
+-- them. Each is nil when the client does not report it, and is left out.
+
+-- The loyalty rank as the character frame shows it, for example "Faithful".
+local function PetLoyalty()
+    local info = C_PetInfo
+    if not (info and info.GetPetLoyalty) then return nil end
+    local text = SafeValue(info.GetPetLoyalty())
+    if type(text) ~= "string" or text == "" then return nil end
+    return text
+end
+
+-- Above 0 while the pet is gaining loyalty, below 0 while it is losing it.
+local function PetLoyaltyRate()
+    local info = C_PetInfo
+    if not (info and info.GetPetHappiness) then return nil end
+    local rate = SafeValue(select(3, info.GetPetHappiness()))
+    return type(rate) == "number" and rate or nil
+end
+
+-- Unspent training points. The trainer never shows fewer than none.
+local function PetTrainingPoints()
+    local info = C_PetInfo
+    if not (info and info.GetPetTrainingPoints) then return nil end
+    local total, used = info.GetPetTrainingPoints()
+    total, used = SafeValue(total), SafeValue(used)
+    if type(total) ~= "number" or type(used) ~= "number" then return nil end
+    return math.max(total - used, 0)
+end
+
 local function BarText()
-    return FormatText(db.textStyle, pet.present, pet.level, pet.current, pet.max)
+    local loyalty = db.textLoyalty and pet.present and PetLoyalty() or nil
+    local points = db.textTraining and pet.present and PetTrainingPoints() or nil
+    return FormatText(db.textStyle, pet.present, pet.level, pet.current, pet.max, loyalty, points)
 end
 
 -- With Show tooltip off, hovering the bar or its grip shows nothing.
@@ -303,6 +358,24 @@ local function ShowTooltip(owner)
             GameTooltip:AddDoubleLine("Experience", ("%d / %d"):format(pet.current, pet.max),
                 LABEL_COLOR[1], LABEL_COLOR[2], LABEL_COLOR[3], 1, 1, 1)
             GameTooltip:AddDoubleLine("To next level", ("%d"):format(pet.max - pet.current),
+                LABEL_COLOR[1], LABEL_COLOR[2], LABEL_COLOR[3], 1, 1, 1)
+        end
+
+        local loyalty = PetLoyalty()
+        if loyalty then
+            GameTooltip:AddDoubleLine("Loyalty", loyalty,
+                LABEL_COLOR[1], LABEL_COLOR[2], LABEL_COLOR[3], 1, 1, 1)
+            local rate = PetLoyaltyRate()
+            if rate and rate > 0 then
+                GameTooltip:AddLine("Gaining loyalty", unpack(GAIN_COLOR))
+            elseif rate and rate < 0 then
+                GameTooltip:AddLine("Losing loyalty", unpack(LOSS_COLOR))
+            end
+        end
+
+        local points = PetTrainingPoints()
+        if points then
+            GameTooltip:AddDoubleLine("Training points", ("%d"):format(points),
                 LABEL_COLOR[1], LABEL_COLOR[2], LABEL_COLOR[3], 1, 1, 1)
         end
     else
@@ -603,6 +676,20 @@ local function SetTextStyle(key)
     NotifyChanged()
 end
 
+-- What the bar's text adds after its style: the loyalty rank and the unspent
+-- training points.
+local function SetTextLoyalty(show)
+    db.textLoyalty = show and true or false
+    Refresh()
+    NotifyChanged()
+end
+
+local function SetTextTraining(show)
+    db.textTraining = show and true or false
+    Refresh()
+    NotifyChanged()
+end
+
 -- The size from the settings page's sliders. The bar keeps its place.
 local function SetBarSize(width, height)
     db.width = Clamp(Round(width), MIN_WIDTH, MaxWidth())
@@ -728,6 +815,13 @@ function ShowMenu(owner)
                 function() return db.textStyle == key end,
                 function() SetTextStyle(key) end)
         end
+        textMenu:CreateDivider()
+        textMenu:CreateCheckbox("Loyalty",
+            function() return db.textLoyalty end,
+            function() SetTextLoyalty(not db.textLoyalty) end)
+        textMenu:CreateCheckbox("Training points",
+            function() return db.textTraining end,
+            function() SetTextTraining(not db.textTraining) end)
 
         AddMediaMenu(root, "Font", FontChoices(), "fontPath", SetFontPath)
 
@@ -764,6 +858,8 @@ local HELP = {
     "/petxp texture <name> - for example blizzard, solid or a LibSharedMedia texture",
     "/petxp color - pick the bar color, or give purple | blue | green | a hex code like 33aaff",
     "/petxp text full | short | level | percent | none - how much the bar says",
+    "/petxp loyalty on | off - add your pet's loyalty to the bar's text",
+    "/petxp training on | off - add its unspent training points (TP)",
     "/petxp font <name> - for example friz, arial or a LibSharedMedia font",
     "/petxp size " .. MIN_FONT_SIZE .. "-" .. MAX_FONT_SIZE .. " - font size",
     "/petxp outline none | outline | thick",
@@ -870,6 +966,22 @@ SlashCmdList["BEASTXP"] = function(msg)
         else
             Print("use full, short, level, percent or none.")
         end
+    elseif command == "loyalty" then
+        if word == "on" or word == "off" then
+            SetTextLoyalty(word == "on")
+            Print(db.textLoyalty and "the bar's text shows your pet's loyalty."
+                or "the bar's text leaves loyalty out.")
+        else
+            Print("use /petxp loyalty on or /petxp loyalty off.")
+        end
+    elseif command == "training" or command == "tp" then
+        if word == "on" or word == "off" then
+            SetTextTraining(word == "on")
+            Print(db.textTraining and "the bar's text shows your pet's unspent training points."
+                or "the bar's text leaves training points out.")
+        else
+            Print("use /petxp training on or /petxp training off.")
+        end
     elseif command == "font" then
         local font = FindMedia(FontChoices(), word)
         if font then
@@ -918,10 +1030,13 @@ ns.API = {
     ApplyFont = ApplyFont,
     FormatText = FormatText,
     -- The preview shows the real pet when one is out and reports its
-    -- experience, and the sample pet of the Text menu's examples otherwise.
+    -- experience, and the sample pet of the Text menu's examples otherwise:
+    -- level, experience, the most there is, loyalty and training points.
     PreviewPet = function()
-        if pet.present and pet.max > 0 then return pet.level, pet.current, pet.max end
-        return 14, 1290, 2150
+        if pet.present and pet.max > 0 then
+            return pet.level, pet.current, pet.max, PetLoyalty(), PetTrainingPoints()
+        end
+        return 14, 1290, 2150, "Faithful", 25
     end,
 
     SetLocked = SetLocked,
@@ -931,6 +1046,8 @@ ns.API = {
     SetBarColor = SetBarColor,
     OpenColorPicker = OpenColorPicker,
     SetTextStyle = SetTextStyle,
+    SetTextLoyalty = SetTextLoyalty,
+    SetTextTraining = SetTextTraining,
     SetFontPath = SetFontPath,
     SetFontSize = SetFontSize,
     SetOutline = SetOutline,
@@ -959,8 +1076,10 @@ ns.API = {
 
 -- What can change the bar. UNIT_PET_EXPERIENCE is the real signal;
 -- PLAYER_XP_UPDATE backs it up, since a pet's experience comes from the same
--- kills. Each is registered through pcall: registering an event the client
--- does not have raises an error, and one missing event must not stop the rest.
+-- kills. UNIT_HAPPINESS and UNIT_PET_TRAINING_POINTS keep an open tooltip's
+-- loyalty and training points current. Each is registered through pcall:
+-- registering an event the client does not have raises an error, and one
+-- missing event must not stop the rest.
 local PET_EVENTS = {
     "UNIT_PET",
     "UNIT_PET_EXPERIENCE",
@@ -968,6 +1087,8 @@ local PET_EVENTS = {
     "PET_UI_UPDATE",
     "PLAYER_XP_UPDATE",
     "PLAYER_ENTERING_WORLD",
+    "UNIT_HAPPINESS",
+    "UNIT_PET_TRAINING_POINTS",
 }
 
 local events = CreateFrame("Frame")
@@ -1000,6 +1121,6 @@ events:SetScript("OnEvent", function(self, event, unit)
 
     unit = SafeValue(unit)
     if event == "UNIT_PET" and unit ~= "player" then return end
-    if event == "UNIT_LEVEL" and unit ~= "pet" then return end
+    if (event == "UNIT_LEVEL" or event == "UNIT_HAPPINESS") and unit ~= "pet" then return end
     Refresh()
 end)

@@ -171,10 +171,11 @@ local function UpdatePreview()
     API.ApplyTexture(preview)
     API.ApplyFont(preview)
 
-    local level, current, max = API.PreviewPet()
+    local level, current, max, loyalty, points = API.PreviewPet()
     preview.status:SetMinMaxValues(0, max > 0 and max or 1)
     preview.status:SetValue(math.min(current, max))
-    preview.text:SetText(API.FormatText(db.textStyle, true, level, current, max))
+    preview.text:SetText(API.FormatText(db.textStyle, true, level, current, max,
+        db.textLoyalty and loyalty or nil, db.textTraining and points or nil))
 end
 
 local function RefreshPage()
@@ -182,6 +183,8 @@ local function RefreshPage()
     refreshing = true
     controls.lock:SetChecked(db.locked)
     controls.tooltip:SetChecked(db.showTooltip)
+    controls.textLoyalty:SetChecked(db.textLoyalty)
+    controls.textTraining:SetChecked(db.textTraining)
     controls.width:SetValue(db.width)
     controls.height:SetValue(db.height)
     controls.fontSize:SetValue(db.fontSize)
@@ -240,7 +243,7 @@ local function BuildBarSection()
     Tooltip(controls.lock, "A locked bar cannot be moved or resized, and hides while no pet is out.")
 
     controls.tooltip = Checkbox(Row("Show tooltip"), API.SetShowTooltip)
-    Tooltip(controls.tooltip, "Hovering over the bar shows your pet's name and the experience it still needs.")
+    Tooltip(controls.tooltip, "Hovering over the bar shows your pet's name, the experience it still needs, its loyalty and its training points.")
 
     controls.width = Slider(Row("Width"), API.MIN_WIDTH, API.MaxWidth(), function(value)
         API.SetBarSize(value, API.GetDB().height)
@@ -294,6 +297,11 @@ local function BuildTextSection()
                 function() API.SetTextStyle(key) end)
         end
     end)
+
+    controls.textLoyalty = Checkbox(Row("Loyalty"), API.SetTextLoyalty)
+    Tooltip(controls.textLoyalty, "Adds your pet's loyalty rank after the text.")
+    controls.textTraining = Checkbox(Row("Training points"), API.SetTextTraining)
+    Tooltip(controls.textTraining, "Adds your pet's unspent training points after the text, for example 25 TP.")
 
     MediaDropdown(Row("Font"), API.FontChoices, "fontPath", API.SetFontPath)
 

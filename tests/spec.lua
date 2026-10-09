@@ -132,6 +132,47 @@ test("the tooltip names the pet and the experience to the next level", function(
     assert_false(GameTooltip:IsShown(), "tooltip still up")
 end)
 
+test("the tooltip shows the pet's loyalty and unspent training points", function()
+    __boot({ pet = hunterPet({ loyalty = "Faithful", loyaltyRate = 1, training = { 120, 95 } }) })
+    __script(BeastXPBar, "OnEnter")
+    local lines = GameTooltip.__lines
+    assert_true(has_line(lines, "Loyalty | Faithful"), "no loyalty line")
+    assert_true(has_line(lines, "Gaining loyalty"), "no gaining line")
+    assert_true(has_line(lines, "Training points | 25"), "no training points line")
+
+    -- The open tooltip follows the pet's happiness and its training points.
+    __pet.loyaltyRate = -1
+    __fire("UNIT_HAPPINESS", "pet")
+    assert_true(has_line(GameTooltip.__lines, "Losing loyalty"), "loyalty loss not shown")
+    assert_false(has_line(GameTooltip.__lines, "Gaining loyalty"), "stale gaining line")
+
+    __pet.loyaltyRate = 0
+    __pet.training = { 120, 130 }
+    __fire("UNIT_PET_TRAINING_POINTS", "player")
+    assert_true(has_line(GameTooltip.__lines, "Training points | 0"), "training points below zero")
+    assert_false(has_line(GameTooltip.__lines, "Losing loyalty"), "a steady pet shows a trend")
+
+    -- A rank the game does not report is left out.
+    __pet.loyalty = ""
+    __fire("UNIT_PET_EXPERIENCE", "pet")
+    assert_false(has_line(GameTooltip.__lines, "Loyalty | "), "an empty loyalty line")
+end)
+
+test("a client without pet info leaves loyalty and training points out", function()
+    local saved = C_PetInfo
+    C_PetInfo = nil
+    local ok, err = pcall(function()
+        __boot({ pet = hunterPet({ loyalty = "Faithful", training = { 120, 95 } }) })
+        __script(BeastXPBar, "OnEnter")
+    end)
+    C_PetInfo = saved
+    assert_true(ok, tostring(err))
+    assert_true(has_line(GameTooltip.__lines, "Experience | 340 / 2150"), "tooltip lost its experience")
+    for _, line in ipairs(GameTooltip.__lines) do
+        assert_false(line:find("Loyalty", 1, true) or line:find("Training", 1, true), "unexpected " .. line)
+    end
+end)
+
 test("with the tooltip off, hovering the bar or its grip shows nothing", function()
     __boot({ pet = hunterPet() })
     assert_eq(BeastXPDB.showTooltip, true, "a fresh install has no tooltip")
@@ -645,6 +686,60 @@ test("the menu's text entries show an example and switch the style", function()
     assert_eq(BeastXPDB.textStyle, "percent")
 end)
 
+test("loyalty and training points can follow any text style", function()
+    __boot({ pet = hunterPet({ loyalty = "Faithful", training = { 120, 95 } }) })
+    assert_eq(BeastXPBar.text:GetText(), "Level 14   340 / 2150  (15%)", "added without being asked")
+
+    SlashCmdList.BEASTXP("loyalty on")
+    assert_eq(BeastXPBar.text:GetText(), "Level 14   340 / 2150  (15%)   Faithful")
+    SlashCmdList.BEASTXP("tp on")
+    assert_eq(BeastXPBar.text:GetText(), "Level 14   340 / 2150  (15%)   Faithful   25 TP")
+    SlashCmdList.BEASTXP("text short")
+    assert_eq(BeastXPBar.text:GetText(), "14  340/2150  15%  Faithful  25 TP")
+    SlashCmdList.BEASTXP("text percent")
+    assert_eq(BeastXPBar.text:GetText(), "15%  Faithful  25 TP")
+    SlashCmdList.BEASTXP("text none")
+    assert_eq(BeastXPBar.text:GetText(), "", "no text showed loyalty or training points")
+
+    -- The text follows the pet's training points.
+    SlashCmdList.BEASTXP("text level")
+    __pet.training = { 120, 100 }
+    __fire("UNIT_PET_TRAINING_POINTS", "player")
+    assert_eq(BeastXPBar.text:GetText(), "14  15%  Faithful  20 TP")
+
+    SlashCmdList.BEASTXP("loyalty off")
+    assert_eq(BeastXPBar.text:GetText(), "14  15%  20 TP")
+    SlashCmdList.BEASTXP("training maybe")
+    assert_true(__printed("use /petxp training on"), "no usage for a bad word")
+    assert_true(BeastXPDB.textTraining, "a bad word changed the setting")
+
+    -- A rank the game does not report is left out, and a bar with no pet
+    -- says only that.
+    __pet.loyalty = nil
+    SlashCmdList.BEASTXP("loyalty on")
+    assert_eq(BeastXPBar.text:GetText(), "14  15%  20 TP")
+    __pet = nil
+    __fire("UNIT_PET", "player")
+    assert_eq(BeastXPBar.text:GetText(), "No pet")
+end)
+
+test("the Text menu turns loyalty and training points on and off", function()
+    __boot({ pet = hunterPet({ loyalty = "Faithful", training = { 120, 95 } }) })
+    __script(BeastXPBar, "OnMouseUp", "RightButton")
+    local loyalty = __menu_item("Text", "Loyalty")
+    local points = __menu_item("Text", "Training points")
+    assert_true(loyalty and points, "no loyalty or training points in the Text menu")
+    assert_false(__menu_selected(loyalty), "loyalty on for a fresh install")
+    assert_false(__menu_selected(points), "training points on for a fresh install")
+
+    __menu_click(loyalty)
+    __menu_click(points)
+    assert_true(__menu_selected(loyalty))
+    assert_eq(BeastXPBar.text:GetText(), "Level 14   340 / 2150  (15%)   Faithful   25 TP")
+    __menu_click(points)
+    assert_eq(BeastXPBar.text:GetText(), "Level 14   340 / 2150  (15%)   Faithful")
+end)
+
 test("an unknown text style is refused, and a broken saved one falls back to full", function()
     __boot({ pet = hunterPet() })
     SlashCmdList.BEASTXP("text tiny")
@@ -712,12 +807,14 @@ test("the page shows the current settings when it opens", function()
         db = {
             locked = true, width = 300, height = 20, fontSize = 14, outline = "OUTLINE",
             texturePath = "Interface\\Buttons\\WHITE8X8", barColor = { 0.0, 0.39, 0.88 }, textStyle = "short",
-            showTooltip = false,
+            showTooltip = false, textLoyalty = true,
         },
     })
     open_page()
     assert_true(__control("Lock bar", "UICheckButtonTemplate"):GetChecked(), "lock not ticked")
     assert_false(__control("Show tooltip", "UICheckButtonTemplate"):GetChecked(), "tooltip ticked")
+    assert_true(__control("Loyalty", "UICheckButtonTemplate"):GetChecked(), "loyalty not ticked")
+    assert_false(__control("Training points", "UICheckButtonTemplate"):GetChecked(), "training points ticked")
     assert_eq(__control("Width", "MinimalSliderWithSteppersTemplate"):GetValue(), 300)
     assert_eq(__control("Height", "MinimalSliderWithSteppersTemplate"):GetValue(), 20)
     assert_eq(__control("Font size", "MinimalSliderWithSteppersTemplate"):GetValue(), 14)
@@ -768,6 +865,14 @@ test("every control on the page changes the bar at once", function()
 
     __dropdown_pick(__control("Text", "WowStyle1DropdownTemplate"), "60%")
     assert_eq(BeastXPBar.text:GetText(), "15%")
+    local training = __control("Training points", "UICheckButtonTemplate")
+    training:SetChecked(true)
+    __script(training, "OnClick")
+    assert_eq(BeastXPBar.text:GetText(), "15%  0 TP", "training points box did not add them")
+    local loyalty = __control("Loyalty", "UICheckButtonTemplate")
+    loyalty:SetChecked(true)
+    __script(loyalty, "OnClick")
+    assert_true(BeastXPDB.textLoyalty, "loyalty box did not turn it on")
 
     __dropdown_pick(__control("Font", "WowStyle1DropdownTemplate"), "Arial Narrow")
     __control("Font size", "MinimalSliderWithSteppersTemplate"):SetValue(16)
@@ -818,6 +923,9 @@ test("the preview copies the bar, with a sample pet when none is out", function(
     assert_color(preview.status, 1, 0, 0, "preview colour")
     SlashCmdList.BEASTXP("text percent")
     assert_eq(preview.text:GetText(), "60%")
+    SlashCmdList.BEASTXP("loyalty on")
+    SlashCmdList.BEASTXP("training on")
+    assert_eq(preview.text:GetText(), "60%  Faithful  25 TP", "sample loyalty or training points missing")
 
     __boot({ pet = hunterPet() })
     open_page()
@@ -967,10 +1075,14 @@ end)
 --------------------------------------------------------------------------------
 
 test("secret values from the game never raise an error", function()
-    __boot({ pet = { current = __secret(), max = __secret(), level = __secret(), name = __secret() } })
+    __boot({ pet = { current = __secret(), max = __secret(), level = __secret(), name = __secret(),
+        loyalty = __secret(), loyaltyRate = __secret(), training = { __secret(), __secret() } } })
     assert_eq(BeastXPBar.text:GetText(), "Pet")
     __script(BeastXPBar, "OnEnter")
     assert_true(has_line(GameTooltip.__lines, "Your pet"), "secret name shown")
+    for _, line in ipairs(GameTooltip.__lines) do
+        assert_false(line:find("Loyalty", 1, true) or line:find("Training", 1, true), "secret shown: " .. line)
+    end
     __fire("UNIT_PET", __secret())
     __fire("UNIT_LEVEL", __secret())
 

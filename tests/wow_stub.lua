@@ -99,6 +99,24 @@ function UnitName(unit)
     if unit == "player" then return "Tester" end
 end
 
+-- Forever's pet info. A pet may also carry loyalty (the text the character
+-- frame shows), loyaltyRate (above 0 while gaining loyalty, below 0 while
+-- losing it) and training = { total, used }.
+C_PetInfo = {
+    GetPetLoyalty = function()
+        if __pet and __pet.loyalty then return __pet.loyalty end
+    end,
+    GetPetHappiness = function()
+        if not __pet then return end
+        return 3, 125, __pet.loyaltyRate or 0
+    end,
+    GetPetTrainingPoints = function()
+        local training = __pet and __pet.training
+        if not training then return 0, 0 end
+        return training[1], training[2]
+    end,
+}
+
 --------------------------------------------------------------------------------
 -- Widgets
 --------------------------------------------------------------------------------
@@ -553,6 +571,7 @@ end
 local DEFAULT_EVENTS = {
     "PLAYER_LOGIN", "UNIT_PET", "UNIT_PET_EXPERIENCE", "UNIT_LEVEL",
     "PET_UI_UPDATE", "PLAYER_XP_UPDATE", "PLAYER_ENTERING_WORLD", "PLAYER_REGEN_ENABLED",
+    "UNIT_HAPPINESS", "UNIT_PET_TRAINING_POINTS",
 }
 
 -- LibSharedMedia as another addon loads it: LibStub, and the part of the
