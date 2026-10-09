@@ -95,3 +95,11 @@ Copy `BeastXP.toc`, `BeastXP.lua`, `BeastXP_Options.lua` and the `Libs` folder i
 `npm install` once, then `npm test`. It loads every file the `.toc` lists, the embedded libraries
 included, into a Lua VM on a mocked WoW API (`tests/wow_stub.lua`) and runs `tests/spec.lua`. The
 mock is not the game, so still check the bar in the client.
+
+## Releasing
+
+Push a tag such as `v1.0.1`. The release workflow (`.github/workflows/release.yml`) runs the tests,
+then the BigWigs packager builds the zip from `.pkgmeta`, writes the tag into the toc's `Version`,
+and publishes it as a GitHub release and to CurseForge under the Forever flavor. A tag containing
+`alpha` or `beta` is uploaded as that release type. CurseForge needs the `CF_API_KEY` repository
+secret and the toc's `X-Curse-Project-ID`; without them the packager only makes the GitHub release.

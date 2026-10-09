@@ -2,7 +2,7 @@
 ## Title: BeastXP
 ## Notes: A small bar for your hunter pet's experience. Drag to move, drag the corner to resize, right-click or /petxp for the settings.
 ## Author: Florenzi
-## Version: 1.0.0
+## Version: @project-version@
 ## IconTexture: Interface\Icons\Ability_Hunter_BeastTraining
 ## SavedVariables: BeastXPDB
 ## X-Embeds: LibStub, CallbackHandler-1.0, LibSharedMedia-3.0

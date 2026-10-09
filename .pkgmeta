@@ -1,0 +1,9 @@
+package-as: BeastXP
+
+# The libraries are embedded under Libs and committed, so there are no
+# externals. Dotfiles (.github, .gitignore, ...) are left out by default.
+ignore:
+  - tests
+  - package.json
+  - package-lock.json
+  - dist
