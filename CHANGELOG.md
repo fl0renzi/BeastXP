@@ -1,5 +1,9 @@
 # BeastXP
 
+## 1.0.1
+
+- The download now holds only the addon's own files.
+
 ## 1.0.0
 
 First release.
