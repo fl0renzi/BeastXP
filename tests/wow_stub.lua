@@ -259,8 +259,60 @@ function methods:SetText(text)
     self.__text = text
 end
 function methods:GetText() return self.__text end
+function methods:SetTextColor(r, g, b, a) self.__textColor = { r, g, b, a } end
 function methods:SetJustifyH(justify) self.__justify = justify end
 function methods:SetWordWrap(wrap) self.__wrap = wrap end
+
+-- Runs after the handler already set, the way the client's does.
+function methods:HookScript(name, hook)
+    local original = self.__scripts[name]
+    self.__scripts[name] = function(...)
+        if original then original(...) end
+        hook(...)
+    end
+end
+
+-- Keyboard input: whether a frame takes keys, and whether a key it handled
+-- goes on to the game too.
+function methods:EnableKeyboard(enable) self.__keyboard = enable end
+function methods:SetPropagateKeyboardInput(propagate) self.__propagate = propagate end
+
+-- A test sets __mouseOver on a frame to put the mouse over it.
+function methods:IsMouseOver() return self.__mouseOver == true end
+
+-- A frame's centre, laid out from its last anchor the way the client lays it
+-- out, for frames anchored to UIParent; UIParent's own is half its size.
+local POINT_FRACTIONS = {
+    TOPLEFT    = { -0.5,  0.5 }, TOP    = { 0,  0.5 }, TOPRIGHT    = { 0.5,  0.5 },
+    LEFT       = { -0.5,  0   }, CENTER = { 0,  0   }, RIGHT       = { 0.5,  0   },
+    BOTTOMLEFT = { -0.5, -0.5 }, BOTTOM = { 0, -0.5 }, BOTTOMRIGHT = { 0.5, -0.5 },
+}
+function methods:GetCenter()
+    local width, height = UIParent:GetWidth(), UIParent:GetHeight()
+    if self == UIParent then return width / 2, height / 2 end
+    local point, relativeTo, relativePoint, x, y = self:GetPoint()
+    if not point or relativeTo ~= UIParent then return nil end
+    local p, r = POINT_FRACTIONS[point], POINT_FRACTIONS[relativePoint]
+    return width / 2 + r[1] * width + x - p[1] * self:GetWidth(),
+        height / 2 + r[2] * height + y - p[2] * self:GetHeight()
+end
+
+-- Edit boxes. Focus is tracked, and gaining or losing it fires its script at
+-- once, as in the client.
+function methods:SetAutoFocus(auto) self.__autoFocus = auto end
+function methods:SetNumeric(numeric) self.__numeric = numeric end
+function methods:SetMaxLetters(count) self.__maxLetters = count end
+function methods:HasFocus() return self.__focus == true end
+function methods:SetFocus()
+    if self.__focus then return end
+    self.__focus = true
+    if self.__scripts.OnEditFocusGained then self.__scripts.OnEditFocusGained(self) end
+end
+function methods:ClearFocus()
+    if not self.__focus then return end
+    self.__focus = false
+    if self.__scripts.OnEditFocusLost then self.__scripts.OnEditFocusLost(self) end
+end
 
 local widgetMeta = { __index = methods }
 
@@ -327,6 +379,18 @@ templates.BackdropTemplate = nil -- the bar has no border
 
 templates.UICheckButtonTemplate = function() end
 templates.UIPanelButtonTemplate = function() end
+
+-- The client's scroll frame, with the scroll bar its OnLoad makes.
+templates.ScrollFrameTemplate = function(frame)
+    frame.ScrollBar = __new_widget("EventFrame", frame)
+    function frame.ScrollBar:SetHideIfUnscrollable(hide) self.__hideIfUnscrollable = hide end
+    function frame:SetScrollChild(child) self.__scrollChild = child end
+end
+
+-- The client's input box: Escape clears the focus.
+templates.InputBoxTemplate = function(frame)
+    frame:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
+end
 
 templates.ColorSwatchTemplate = function(frame)
     function frame:SetColorRGB(r, g, b) self.__swatch = { r, g, b } end
@@ -487,6 +551,8 @@ local function resetGlobals()
 
     __inCombat = false
     function InCombatLockdown() return __inCombat end
+    __shift = false
+    function IsShiftKeyDown() return __shift end
 
     GameTooltip = __new_widget("GameTooltip")
     GameTooltip.__shown = false
@@ -523,6 +589,22 @@ local function resetGlobals()
     LibStub = nil
     SlashCmdList = {}
     SLASH_BEASTXP1, SLASH_BEASTXP2 = nil, nil
+
+    -- The client's EventRegistry, as far as Edit Mode goes. Callbacks are
+    -- kept by event and owner, and called without arguments, as the client's
+    -- closures are; __editMode opens or closes Edit Mode.
+    local callbacks = {}
+    EventRegistry = {
+        RegisterCallback = function(self, event, func, owner)
+            callbacks[event] = callbacks[event] or {}
+            callbacks[event][owner or func] = func
+        end,
+    }
+    function __editMode(open)
+        for _, func in pairs(callbacks[open and "EditMode.Enter" or "EditMode.Exit"] or {}) do
+            func()
+        end
+    end
 end
 
 -- Finds a menu entry by its path of texts, for example ("Font", "Arial Narrow").
@@ -571,6 +653,7 @@ end
 local DEFAULT_EVENTS = {
     "PLAYER_LOGIN", "UNIT_PET", "UNIT_PET_EXPERIENCE", "UNIT_LEVEL",
     "PET_UI_UPDATE", "PLAYER_XP_UPDATE", "PLAYER_ENTERING_WORLD", "PLAYER_REGEN_ENABLED",
+    "PLAYER_REGEN_DISABLED",
     "UNIT_HAPPINESS", "UNIT_PET_TRAINING_POINTS",
 }
 
@@ -632,6 +715,7 @@ function __boot(options)
     BeastXPDB = options.db
     BeastXPBar = nil
     if options.noSettings then Settings = nil end
+    if options.noEventRegistry then EventRegistry = nil end
 
     if options.libSharedMedia then __load_libsharedmedia() end
 

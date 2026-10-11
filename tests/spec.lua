@@ -308,6 +308,128 @@ test("a locked bar cannot be dragged or resized, and hides its grip", function()
     assert_true(bar.grip:IsShown(), "grip not back after unlocking")
 end)
 
+test("the game's Edit Mode shows a locked bar, lets it move, and locks it again", function()
+    __boot({ db = { locked = true } })
+    assert_eq(BeastXPBar, nil, "a locked bar with no pet was built")
+
+    __editMode(true)
+    local bar = BeastXPBar
+    assert_true(bar and bar:IsShown(), "no bar in Edit Mode")
+    assert_true(bar.highlight:IsShown(), "bar not highlighted")
+    assert_true(bar.grip:IsShown(), "no grip in Edit Mode")
+    assert_eq(bar.text:GetText(), "No pet")
+    -- The tooltip says how to move the bar instead of reading the pet.
+    __script(bar, "OnEnter")
+    assert_true(has_line(GameTooltip.__lines, "Arrow keys move it 1, or 10 with Shift."), "no Edit Mode hint")
+    assert_false(has_line(GameTooltip.__lines, "No hunter pet is out."), "pet details in Edit Mode")
+
+    __script(bar, "OnDragStart")
+    assert_true(bar.__moving, "a locked bar could not be moved in Edit Mode")
+    bar:ClearAllPoints()
+    bar:SetPoint("TOP", UIParent, "TOP", 0, -50)
+    __script(bar, "OnDragStop")
+    assert_eq(BeastXPDB.point, "TOP", "the Edit Mode position was not saved")
+    __script(bar.grip, "OnMouseDown", "LeftButton")
+    assert_eq(bar.__sizing, "BOTTOMRIGHT", "could not resize in Edit Mode")
+    __script(bar.grip, "OnMouseUp", "LeftButton")
+
+    __editMode(false)
+    assert_true(BeastXPDB.locked, "Edit Mode changed the lock")
+    assert_false(bar.highlight:IsShown(), "still highlighted")
+    assert_false(bar.grip:IsShown(), "grip left on a locked bar")
+    assert_false(bar:IsShown(), "a locked bar with no pet stayed up")
+    __script(bar, "OnDragStart")
+    assert_eq(bar.__moving, nil, "a locked bar moved after Edit Mode")
+end)
+
+test("Edit Mode shows the bar's X and Y, following a drag as it happens", function()
+    __boot({ pet = hunterPet() })
+    __editMode(true)
+    local bar = BeastXPBar
+    assert_eq(bar.readout:GetText(), "X 0   Y -180")
+
+    -- During a drag the numbers follow the bar each frame, before it is saved.
+    __script(bar, "OnDragStart")
+    bar:ClearAllPoints()
+    bar:SetPoint("BOTTOMLEFT", UIParent, "BOTTOMLEFT", 100, 200)
+    __script(bar.highlight, "OnUpdate", 0.016)
+    assert_eq(bar.readout:GetText(), "X -740   Y -331", "readout not following the drag")
+    assert_eq(BeastXPDB.point, nil, "saved before the drag ended")
+    __script(bar, "OnDragStop")
+    assert_eq(bar.highlight:GetScript("OnUpdate"), nil, "still updating after the drag")
+    assert_eq(bar.readout:GetText(), "X -740   Y -331")
+
+    -- A change from anywhere else shows too.
+    SlashCmdList.BEASTXP("position 10 20")
+    assert_eq(bar.readout:GetText(), "X 10   Y 20")
+
+    -- Outside Edit Mode a drag runs nothing every frame.
+    __editMode(false)
+    __script(bar, "OnDragStart")
+    assert_eq(bar.highlight:GetScript("OnUpdate"), nil, "per-frame updates outside Edit Mode")
+    __script(bar, "OnDragStop")
+end)
+
+test("in Edit Mode the arrow keys move the bar under the mouse, other keys pass on", function()
+    __boot({ pet = hunterPet() })
+    __editMode(true)
+    local bar, nudger = BeastXPBar, BeastXPBar.nudger
+    assert_true(nudger:IsVisible(), "arrow keys not listening in Edit Mode")
+    assert_eq(nudger.__keyboard, true)
+
+    -- Away from the bar every key goes on to the game, arrows included.
+    __script(nudger, "OnKeyDown", "RIGHT")
+    assert_eq(nudger.__propagate, true, "an arrow kept with the mouse elsewhere")
+    assert_eq(BeastXPDB.point, nil, "moved with the mouse elsewhere")
+
+    bar.__mouseOver = true
+    __script(nudger, "OnKeyDown", "RIGHT")
+    assert_eq(nudger.__propagate, false, "the arrow went on to the game too")
+    assert_eq(BeastXPDB.x, 1)
+    assert_eq(BeastXPDB.y, -180)
+    __shift = true
+    __script(nudger, "OnKeyDown", "DOWN")
+    assert_eq(BeastXPDB.y, -190, "Shift did not move it 10")
+    assert_eq(bar.readout:GetText(), "X 1   Y -190")
+    __shift = false
+    __script(nudger, "OnKeyDown", "A")
+    assert_eq(nudger.__propagate, true, "a letter key was kept")
+    __script(nudger, "OnKeyDown", "ESCAPE")
+    assert_eq(nudger.__propagate, true, "Escape was kept from Edit Mode")
+
+    -- Combat puts the keys back with the game, until it ends.
+    __inCombat = true
+    __fire("PLAYER_REGEN_DISABLED")
+    assert_false(nudger:IsShown(), "listening for keys in combat")
+    __inCombat = false
+    __fire("PLAYER_REGEN_ENABLED")
+    assert_true(nudger:IsShown(), "not listening again after combat")
+
+    -- Closing Edit Mode stops the listening, and leaves no events behind.
+    __editMode(false)
+    assert_false(nudger:IsVisible(), "listening for keys after Edit Mode")
+    assert_false(__registered("PLAYER_REGEN_DISABLED"), "still watching combat after Edit Mode")
+end)
+
+test("Edit Mode leaves an unlocked bar as it was, and passes a non-hunter by", function()
+    __boot({ pet = hunterPet() })
+    __editMode(true)
+    __editMode(false)
+    assert_true(BeastXPBar:IsShown())
+    assert_true(BeastXPBar.grip:IsShown(), "unlocked bar lost its grip")
+    assert_false(BeastXPBar.highlight:IsShown())
+    __script(BeastXPBar, "OnEnter")
+    assert_true(GameTooltip:IsShown(), "tooltip gone after Edit Mode")
+
+    __boot({ class = "MAGE" })
+    __editMode(true)
+    assert_eq(BeastXPBar, nil, "a non-hunter got a bar in Edit Mode")
+
+    local ok, err = pcall(__boot, { pet = hunterPet(), noEventRegistry = true })
+    assert_true(ok, tostring(err))
+    assert_true(BeastXPBar:IsShown(), "no bar without the EventRegistry")
+end)
+
 test("hiding the bar mid-drag lets go of it", function()
     __boot({ pet = hunterPet() })
     local bar = BeastXPBar
@@ -817,6 +939,8 @@ test("the page shows the current settings when it opens", function()
     assert_false(__control("Training points", "UICheckButtonTemplate"):GetChecked(), "training points ticked")
     assert_eq(__control("Width", "MinimalSliderWithSteppersTemplate"):GetValue(), 300)
     assert_eq(__control("Height", "MinimalSliderWithSteppersTemplate"):GetValue(), 20)
+    assert_eq(__control("Width", "InputBoxTemplate"):GetText(), "300")
+    assert_eq(__control("Height", "InputBoxTemplate"):GetText(), "20")
     assert_eq(__control("Font size", "MinimalSliderWithSteppersTemplate"):GetValue(), 14)
     assert_eq(__dropdown_text(__control("Texture", "WowStyle1DropdownTemplate")), "Solid")
     assert_eq(__dropdown_text(__control("Color", "WowStyle1DropdownTemplate")), "Rested blue")
@@ -881,6 +1005,121 @@ test("every control on the page changes the bar at once", function()
     assert_eq(path, "Fonts\\ARIALN.TTF")
     assert_eq(size, 16)
     assert_eq(flags, "THICKOUTLINE")
+end)
+
+test("the page's rows scroll under its header, so none spill out of the window", function()
+    __boot({ pet = hunterPet() })
+    open_page()
+    -- The last row sits in the scroll child, which is tall enough to hold it.
+    local lastRow = __control("Outline", "WowStyle1DropdownTemplate").__parent
+    local content = lastRow.__parent
+    local scroll = content.__parent
+    assert_eq(scroll.__template, "ScrollFrameTemplate", "rows are not in a scroll frame")
+    assert_eq(scroll.__parent, __settings_page(), "scroll frame not on the page")
+    assert_eq(scroll.__scrollChild, content, "rows are not the scroll child")
+    assert_true(scroll.ScrollBar.__hideIfUnscrollable, "scroll bar shown when nothing scrolls")
+    local top = lastRow.__points[1][5]
+    assert_true(content:GetHeight() >= -top + lastRow:GetHeight(), "scroll child too short for its rows")
+
+    -- The header stays put: Defaults is on the page, not in the scroll child.
+    assert_eq(__page_button("Defaults").__parent, __settings_page())
+end)
+
+test("the page's width and height boxes take an exact size", function()
+    __boot({ pet = hunterPet() })
+    open_page()
+    local width = __control("Width", "InputBoxTemplate")
+    local height = __control("Height", "InputBoxTemplate")
+    assert_eq(width:GetText(), "240")
+    assert_eq(height:GetText(), "18")
+
+    width:SetFocus()
+    width:SetText("312")
+    __script(width, "OnEnterPressed")
+    assert_false(width:HasFocus(), "Enter kept the focus")
+    assert_eq(BeastXPDB.width, 312)
+    assert_eq(BeastXPBar:GetWidth(), 312)
+    assert_eq(__control("Width", "MinimalSliderWithSteppersTemplate"):GetValue(), 312, "slider not moved")
+
+    -- Clicking away applies it too, and a size out of range is pulled in.
+    height:SetFocus()
+    height:SetText("99")
+    height:ClearFocus()
+    assert_eq(BeastXPDB.height, 64)
+    assert_eq(BeastXPBar:GetHeight(), 64)
+    assert_eq(height:GetText(), "64", "box not showing the size in use")
+
+    -- Escape, or an empty box, puts the size in use back.
+    width:SetFocus()
+    width:SetText("500")
+    __script(width, "OnEscapePressed")
+    assert_eq(BeastXPDB.width, 312, "Escape applied the size")
+    assert_eq(width:GetText(), "312")
+    width:SetFocus()
+    width:SetText("")
+    width:ClearFocus()
+    assert_eq(BeastXPDB.width, 312, "an empty box changed the size")
+    assert_eq(width:GetText(), "312")
+
+    -- The slider keeps the box current, but a number being typed is left be.
+    __control("Width", "MinimalSliderWithSteppersTemplate"):SetValue(400)
+    assert_eq(width:GetText(), "400", "box not following the slider")
+    height:SetFocus()
+    height:SetText("2")
+    SlashCmdList.BEASTXP("size 14")
+    assert_eq(height:GetText(), "2", "the page overwrote a number being typed")
+end)
+
+test("the page's X and Y move the bar, measured from the center of the screen", function()
+    __boot({ pet = hunterPet() })
+    open_page()
+    local xBox = __control("X position", "InputBoxTemplate")
+    local yBox = __control("Y position", "InputBoxTemplate")
+    assert_eq(xBox:GetText(), "0")
+    assert_eq(yBox:GetText(), "-180")
+
+    xBox:SetFocus()
+    xBox:SetText("250")
+    __script(xBox, "OnEnterPressed")
+    local point, relativeTo, relativePoint, x, y = BeastXPBar:GetPoint()
+    assert_eq(point, "CENTER")
+    assert_eq(relativeTo, UIParent)
+    assert_eq(relativePoint, "CENTER")
+    assert_eq(x, 250)
+    assert_eq(y, -180, "X moved the bar up or down")
+    assert_eq(__control("X position", "MinimalSliderWithSteppersTemplate"):GetValue(), 250, "slider not moved")
+
+    -- A minus sign works, and the whole bar is kept on the screen: 1920 by
+    -- 1080, with a 240 by 18 bar.
+    yBox:SetFocus()
+    yBox:SetText("-40")
+    yBox:ClearFocus()
+    assert_eq(BeastXPDB.y, -40)
+    xBox:SetFocus()
+    xBox:SetText("5000")
+    xBox:ClearFocus()
+    assert_eq(BeastXPDB.x, 840, "bar pushed off the right of the screen")
+    assert_eq(xBox:GetText(), "840")
+    __control("Y position", "MinimalSliderWithSteppersTemplate"):SetValue(-540)
+    assert_eq(BeastXPDB.y, -531, "bar pushed off the bottom of the screen")
+    assert_eq(yBox:GetText(), "-531")
+    xBox:SetFocus()
+    xBox:SetText("left")
+    xBox:ClearFocus()
+    assert_eq(BeastXPDB.x, 840, "a word moved the bar")
+    assert_eq(xBox:GetText(), "840")
+
+    -- A drag shows as X and Y too, whichever point the client left the bar on.
+    __script(BeastXPBar, "OnDragStart")
+    BeastXPBar:ClearAllPoints()
+    BeastXPBar:SetPoint("BOTTOMLEFT", UIParent, "BOTTOMLEFT", 100, 200)
+    __script(BeastXPBar, "OnDragStop")
+    assert_eq(xBox:GetText(), "-740", "dragged X")
+    assert_eq(yBox:GetText(), "-331", "dragged Y")
+
+    __script(__page_button("Reset position"), "OnClick")
+    assert_eq(xBox:GetText(), "0")
+    assert_eq(yBox:GetText(), "-180")
 end)
 
 test("a change made elsewhere shows on the open page, without calling back", function()
@@ -1016,6 +1255,30 @@ test("slash commands change the same settings", function()
     SlashCmdList.BEASTXP("outline glow")
     assert_true(__printed("use none, outline or thick"), "no usage for a bad outline")
 
+    SlashCmdList.BEASTXP("position 120 -60")
+    assert_eq(BeastXPDB.point, "CENTER")
+    assert_eq(BeastXPDB.x, 120)
+    assert_eq(BeastXPDB.y, -60)
+    assert_true(__printed("bar moved to 120, -60"), "no confirmation")
+    SlashCmdList.BEASTXP("position here")
+    assert_true(__printed("the bar is at 120, -60"), "no usage for a bad position")
+
+    SlashCmdList.BEASTXP("width 300")
+    assert_eq(BeastXPBar:GetWidth(), 300)
+    SlashCmdList.BEASTXP("height 24")
+    assert_eq(BeastXPBar:GetHeight(), 24)
+    assert_eq(BeastXPBar:GetWidth(), 300, "height changed the width")
+    assert_true(__printed("bar size set to 300 x 24"), "no confirmation")
+    SlashCmdList.BEASTXP("height 200")
+    assert_eq(BeastXPDB.height, 64, "height not capped")
+    SlashCmdList.BEASTXP("width 5000")
+    assert_eq(BeastXPDB.width, 1880, "width not kept on screen")
+    SlashCmdList.BEASTXP("width wide")
+    assert_eq(BeastXPDB.width, 1880)
+    assert_true(__printed("give a width from 80 to 1880"), "no usage for a bad width")
+    SlashCmdList.BEASTXP("height")
+    assert_true(__printed("give a height from 6 to 64"), "no usage for a missing height")
+
     SlashCmdList.BEASTXP("  LOCK  ")
     assert_true(BeastXPDB.locked, "mixed case lock ignored")
 
@@ -1055,6 +1318,13 @@ test("a saved point without a relative point anchors to the same point", functio
     local point, _, relativePoint = BeastXPBar:GetPoint()
     assert_eq(point, "TOP")
     assert_eq(relativePoint, "TOP")
+
+    -- An anchor the client has no such point for is not passed on to it.
+    __boot({ pet = hunterPet(), db = { point = "TOP", relativePoint = "NOWHERE", x = 0, y = -100 } })
+    assert_eq(select(3, BeastXPBar:GetPoint()), "TOP", "an unknown relative point kept")
+    __boot({ pet = hunterPet(), db = { point = "MIDDLE", x = 0, y = -100 } })
+    assert_eq(BeastXPDB.point, nil, "an unknown point kept")
+    assert_eq(BeastXPBar:GetPoint(), "CENTER")
 end)
 
 test("a slash command before login does nothing", function()

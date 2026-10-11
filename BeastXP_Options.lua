@@ -15,7 +15,8 @@
 -- The controls are the client's own templates, each one already in use by an
 -- addon that runs on Forever: WowStyle1DropdownTemplate (LFGForever),
 -- MinimalSliderWithSteppersTemplate and ColorSwatchTemplate (Baganator),
--- UICheckButtonTemplate and UIPanelButtonTemplate (QuestForever).
+-- UICheckButtonTemplate and UIPanelButtonTemplate (QuestForever), and
+-- InputBoxTemplate from the client's own shared templates.
 
 local addonName, ns = ...
 if not ns.Allowed then return end
@@ -37,10 +38,17 @@ local ROW_SPACING = 9
 local SECTION_HEIGHT = 40
 local LABEL_X = 37
 local CONTROL_X = -80
-local PAGE_RIGHT = -20
+
+-- Under the header the page scrolls, since its rows can be taller than the
+-- settings window leaves room for. The client's scroll bar sits 6 to the
+-- right of the scrolling area and is 8 wide.
+local SCROLL_TOP = HEADER_HEIGHT + 2
+local SCROLL_RIGHT = -24
+local SCROLL_BOTTOM = 4
 
 local DROPDOWN_WIDTH = 220
 local SLIDER_WIDTH = 250
+local NUMBER_BOX_WIDTH = 52
 
 -- The preview is the bar at its real size, up to what fits in its row.
 local PREVIEW_ROW_HEIGHT = 34
@@ -48,6 +56,7 @@ local PREVIEW_MAX_WIDTH = 300
 local PREVIEW_MAX_HEIGHT = 30
 
 local page            -- the canvas frame, built at login
+local content         -- the scrolling part of the page, under the header
 local categoryID      -- what Settings.OpenToCategory takes
 local combatWaiter    -- opens the page once combat ends
 local controls = {}   -- what RefreshPage keeps in step with the settings
@@ -57,12 +66,12 @@ local refreshing = false -- true while RefreshPage sets controls, so they do not
 -- Building blocks
 --------------------------------------------------------------------------------
 
-local nextY -- where the next row goes, walking down the page
+local nextY -- where the next row goes, walking down the scrolling part
 
 local function NextRow(height)
-    local row = CreateFrame("Frame", nil, page)
-    row:SetPoint("TOPLEFT", page, "TOPLEFT", 0, nextY)
-    row:SetPoint("TOPRIGHT", page, "TOPRIGHT", PAGE_RIGHT, nextY)
+    local row = CreateFrame("Frame", nil, content)
+    row:SetPoint("TOPLEFT", content, "TOPLEFT", 0, nextY)
+    row:SetPoint("TOPRIGHT", content, "TOPRIGHT", 0, nextY)
     row:SetHeight(height)
     nextY = nextY - height - ROW_SPACING
     return row
@@ -106,23 +115,59 @@ local function Checkbox(row, onClick)
     return check
 end
 
+local function WholeNumber(value)
+    return ("%d"):format(math.floor(value + 0.5))
+end
+
 -- The client's stepper slider, whole numbers only, with the value on its
--- right. Its change callback is the one Baganator reads on Forever.
-local function Slider(row, minimum, maximum, onChange)
+-- right unless a NumberBox shows it there instead. Its change callback is the
+-- one Baganator reads on Forever.
+local function Slider(row, minimum, maximum, onChange, withBox)
     local slider = CreateFrame("Slider", nil, row, "MinimalSliderWithSteppersTemplate")
     slider:SetPoint("LEFT", row, "CENTER", CONTROL_X, 0)
     slider:SetWidth(SLIDER_WIDTH)
     slider:SetHeight(20)
-    slider:Init(minimum, minimum, maximum, maximum - minimum, {
+    slider:Init(minimum, minimum, maximum, maximum - minimum, not withBox and {
         [MinimalSliderWithSteppersMixin.Label.Right] = CreateMinimalSliderFormatter(
-            MinimalSliderWithSteppersMixin.Label.Right,
-            function(value) return ("%d"):format(math.floor(value + 0.5)) end),
-    })
+            MinimalSliderWithSteppersMixin.Label.Right, WholeNumber),
+    } or nil)
     slider:RegisterCallback(MinimalSliderWithSteppersMixin.Event.OnValueChanged, function(_, value)
         if refreshing then return end
         onChange(math.floor(value + 0.5))
     end)
     return slider
+end
+
+-- A box on a slider's right for typing an exact number. Enter or clicking
+-- away applies it, and the setter keeps it in range; Escape, or a box left
+-- empty or not holding a number, puts the current value back. A signed box
+-- takes a minus sign too, which a numeric box refuses.
+local function NumberBox(row, slider, current, apply, signed)
+    local box = CreateFrame("EditBox", nil, row, "InputBoxTemplate")
+    box:SetSize(NUMBER_BOX_WIDTH, 20)
+    box:SetPoint("LEFT", slider, "RIGHT", 14, 0)
+    box:SetAutoFocus(false)
+    if not signed then box:SetNumeric(true) end
+    box:SetMaxLetters(signed and 5 or 4)
+    box:SetJustifyH("CENTER")
+    box:SetScript("OnEnterPressed", function(self) self:ClearFocus() end)
+    box:SetScript("OnEscapePressed", function(self)
+        self.cancelled = true
+        self:ClearFocus()
+    end)
+    -- Hooked, so the template still clears its highlight.
+    box:HookScript("OnEditFocusLost", function(self)
+        local value = tonumber(self:GetText())
+        if value and not self.cancelled then apply(value) end
+        self.cancelled = false
+        self:SetText(WholeNumber(current()))
+    end)
+    return box
+end
+
+-- Shows a value in a NumberBox, unless a number is being typed into it.
+local function SetBoxValue(box, value)
+    if not box:HasFocus() then box:SetText(WholeNumber(value)) end
 end
 
 -- The client's dropdown. The generator runs every time the menu opens and on
@@ -187,6 +232,13 @@ local function RefreshPage()
     controls.textTraining:SetChecked(db.textTraining)
     controls.width:SetValue(db.width)
     controls.height:SetValue(db.height)
+    SetBoxValue(controls.widthBox, db.width)
+    SetBoxValue(controls.heightBox, db.height)
+    local x, y = API.BarPosition()
+    controls.x:SetValue(x)
+    controls.y:SetValue(y)
+    SetBoxValue(controls.xBox, x)
+    SetBoxValue(controls.yBox, y)
     controls.fontSize:SetValue(db.fontSize)
     controls.swatch:SetColorRGB(db.barColor[1], db.barColor[2], db.barColor[3])
     for _, dropdown in ipairs(controls.dropdowns) do
@@ -240,17 +292,49 @@ local function BuildBarSection()
     Section("Bar")
 
     controls.lock = Checkbox(Row("Lock bar"), API.SetLocked)
-    Tooltip(controls.lock, "A locked bar cannot be moved or resized, and hides while no pet is out.")
+    Tooltip(controls.lock, "A locked bar cannot be moved or resized, and hides while no pet is out. The game's Edit Mode can still move it.")
 
     controls.tooltip = Checkbox(Row("Show tooltip"), API.SetShowTooltip)
     Tooltip(controls.tooltip, "Hovering over the bar shows your pet's name, the experience it still needs, its loyalty and its training points.")
 
-    controls.width = Slider(Row("Width"), API.MIN_WIDTH, API.MaxWidth(), function(value)
-        API.SetBarSize(value, API.GetDB().height)
-    end)
-    controls.height = Slider(Row("Height"), API.MIN_HEIGHT, API.MAX_HEIGHT, function(value)
-        API.SetBarSize(API.GetDB().width, value)
-    end)
+    -- Drag the slider, or type the exact size into the box beside it.
+    local function SetWidth(value) API.SetBarSize(value, API.GetDB().height) end
+    local function SetHeight(value) API.SetBarSize(API.GetDB().width, value) end
+
+    local widthRow = Row("Width")
+    controls.width = Slider(widthRow, API.MIN_WIDTH, API.MaxWidth(), SetWidth, true)
+    controls.widthBox = NumberBox(widthRow, controls.width, function() return API.GetDB().width end, SetWidth)
+    Tooltip(controls.widthBox, ("Type a width from %d to %d, then press Enter."):format(
+        API.MIN_WIDTH, math.floor(API.MaxWidth())))
+
+    local heightRow = Row("Height")
+    controls.height = Slider(heightRow, API.MIN_HEIGHT, API.MAX_HEIGHT, SetHeight, true)
+    controls.heightBox = NumberBox(heightRow, controls.height, function() return API.GetDB().height end, SetHeight)
+    Tooltip(controls.heightBox, ("Type a height from %d to %d, then press Enter."):format(
+        API.MIN_HEIGHT, API.MAX_HEIGHT))
+
+    -- Where the bar sits, from the centre of the screen, the same way.
+    local function SetX(value) API.SetBarPosition(value, select(2, API.BarPosition())) end
+    local function SetY(value) API.SetBarPosition((API.BarPosition()), value) end
+    local rangeX, rangeY = API.PositionRange()
+
+    local xRow = Row("X position")
+    controls.x = Slider(xRow, -rangeX, rangeX, SetX, true)
+    controls.xBox = NumberBox(xRow, controls.x, function() return (API.BarPosition()) end, SetX, true)
+    Tooltip(controls.xBox, "How far right of the center of the screen the bar sits; below 0 is left of it. Type a number, then press Enter.")
+
+    local yRow = Row("Y position")
+    controls.y = Slider(yRow, -rangeY, rangeY, SetY, true)
+    controls.yBox = NumberBox(yRow, controls.y, function() return select(2, API.BarPosition()) end, SetY, true)
+    Tooltip(controls.yBox, "How far above the center of the screen the bar sits; below 0 is under it. Type a number, then press Enter.")
+
+    local positionRow = Row("Position")
+    local reset = CreateFrame("Button", nil, positionRow, "UIPanelButtonTemplate")
+    reset:SetPoint("LEFT", positionRow, "CENTER", CONTROL_X, 0)
+    reset:SetSize(160, 22)
+    reset:SetText("Reset position")
+    reset:SetScript("OnClick", function() API.ResetLayout() end)
+    Tooltip(reset, "Puts the bar back below your character at its first size.")
 
     MediaDropdown(Row("Texture"), API.TextureChoices, "texturePath", API.SetTexturePath)
 
@@ -275,14 +359,6 @@ local function BuildBarSection()
     end)
     presets:ClearAllPoints()
     presets:SetPoint("LEFT", swatch, "RIGHT", 8, 0)
-
-    local positionRow = Row("Position")
-    local reset = CreateFrame("Button", nil, positionRow, "UIPanelButtonTemplate")
-    reset:SetPoint("LEFT", positionRow, "CENTER", CONTROL_X, 0)
-    reset:SetSize(160, 22)
-    reset:SetText("Reset position")
-    reset:SetScript("OnClick", function() API.ResetLayout() end)
-    Tooltip(reset, "Puts the bar back below your character at its first size.")
 end
 
 local function BuildTextSection()
@@ -324,7 +400,20 @@ local function BuildPage()
     controls.dropdowns = {}
 
     BuildHeader()
-    nextY = -(HEADER_HEIGHT + 10)
+
+    -- The rows scroll under the header in the client's own scroll frame,
+    -- whose scroll bar shows only when the rows do not fit.
+    local scroll = CreateFrame("ScrollFrame", nil, page, "ScrollFrameTemplate")
+    scroll:SetPoint("TOPLEFT", 0, -SCROLL_TOP)
+    scroll:SetPoint("BOTTOMRIGHT", SCROLL_RIGHT, SCROLL_BOTTOM)
+    if scroll.ScrollBar and scroll.ScrollBar.SetHideIfUnscrollable then
+        scroll.ScrollBar:SetHideIfUnscrollable(true)
+    end
+    content = CreateFrame("Frame", nil, scroll)
+    scroll:SetScrollChild(content)
+    -- A scroll child takes no width from its scroll frame, so it is given it.
+    scroll:HookScript("OnSizeChanged", function(_, width) content:SetWidth(width) end)
+    nextY = -10
 
     -- The bar itself is usually under the settings window, so the page shows
     -- its own copy, built the same way.
@@ -336,8 +425,12 @@ local function BuildPage()
 
     BuildBarSection()
     BuildTextSection()
+    content:SetSize(scroll:GetWidth(), -nextY)
 
-    page:SetScript("OnShow", RefreshPage)
+    page:SetScript("OnShow", function()
+        content:SetWidth(scroll:GetWidth())
+        RefreshPage()
+    end)
     page:SetScript("OnHide", function()
         controls.defaults.armed = false
         controls.defaults:SetText("Defaults")

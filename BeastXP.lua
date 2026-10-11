@@ -48,6 +48,15 @@ local SCREEN_MARGIN = 40
 -- Where a bar that has never been moved sits: centred, below the character.
 local DEFAULT_POINT, DEFAULT_X, DEFAULT_Y = "CENTER", 0, -180
 
+-- Where each anchor point sits on a frame, as a fraction of its width and
+-- height from its centre. A saved position may use any of them, since a drag
+-- leaves the bar on whichever point the client picks.
+local POINT_OFFSETS = {
+    TOPLEFT    = { -0.5,  0.5 }, TOP    = { 0,  0.5 }, TOPRIGHT    = { 0.5,  0.5 },
+    LEFT       = { -0.5,  0   }, CENTER = { 0,  0   }, RIGHT       = { 0.5,  0   },
+    BOTTOMLEFT = { -0.5, -0.5 }, BOTTOM = { 0, -0.5 }, BOTTOMRIGHT = { 0.5, -0.5 },
+}
+
 -- No border: a dark backing one pixel wider than the bar on every side, which
 -- is enough edge to read against any background.
 local BAR_INSET = 1
@@ -76,6 +85,15 @@ local LABEL_COLOR = { 1.0, 0.82, 0.0 }
 local HINT_COLOR  = { 0.5, 0.5, 0.5 }
 local GAIN_COLOR  = { 0.1, 1.0, 0.1 }
 local LOSS_COLOR  = { 1.0, 0.1, 0.1 }
+
+-- The light blue the game's Edit Mode lays over the frames it can move, and
+-- the paler blue of the X and Y shown beside the bar's name there.
+local EDIT_MODE_COLOR = { 0.3, 0.65, 1.0, 0.35 }
+local READOUT_COLOR   = { 0.75, 0.88, 1.0 }
+
+-- In Edit Mode the arrow keys move the bar one step, ten with Shift.
+local NUDGE_KEYS = { UP = { 0, 1 }, DOWN = { 0, -1 }, LEFT = { -1, 0 }, RIGHT = { 1, 0 } }
+local NUDGE_STEP, NUDGE_SHIFT_STEP = 1, 10
 
 -- The media every client ships. LibSharedMedia, which BeastXP does not embed,
 -- adds whatever other addons register with it. A choice is saved by its path,
@@ -140,6 +158,7 @@ local bar           -- built on first use
 local active = false -- a hunter, on a client that reports pet experience
 local isHunter = false
 local moving = false -- a drag or a resize is in progress
+local editing = false -- the game's Edit Mode is open
 
 -- The pet as last read. One table, refilled in place, so a refresh allocates
 -- nothing.
@@ -227,9 +246,9 @@ local function InitDB()
 
     -- A position is saved once the bar has been moved. A broken one is dropped
     -- so the bar falls back to its default spot.
-    if type(db.point) ~= "string" or type(db.x) ~= "number" or type(db.y) ~= "number" then
+    if not POINT_OFFSETS[db.point] or type(db.x) ~= "number" or type(db.y) ~= "number" then
         db.point, db.relativePoint, db.x, db.y = nil, nil, nil, nil
-    elseif type(db.relativePoint) ~= "string" then
+    elseif not POINT_OFFSETS[db.relativePoint] then
         db.relativePoint = db.point
     end
 end
@@ -344,9 +363,20 @@ local function BarText()
     return FormatText(db.textStyle, pet.present, pet.level, pet.current, pet.max, loyalty, points)
 end
 
--- With Show tooltip off, hovering the bar or its grip shows nothing.
+-- With Show tooltip off, hovering the bar or its grip shows nothing. While the
+-- game's Edit Mode is open the bar is being placed, not read, so it says how
+-- to move it instead, below the bar to keep its name and X and Y in sight.
 local function ShowTooltip(owner)
     if not db.showTooltip then return end
+    if editing then
+        GameTooltip:SetOwner(owner, "ANCHOR_BOTTOM")
+        GameTooltip:AddLine(addonName, 1, 1, 1)
+        GameTooltip:AddLine("Drag to move, drag the corner to resize.", unpack(HINT_COLOR))
+        GameTooltip:AddLine(("Arrow keys move it %d, or %d with Shift."):format(NUDGE_STEP, NUDGE_SHIFT_STEP),
+            unpack(HINT_COLOR))
+        GameTooltip:Show()
+        return
+    end
     GameTooltip:SetOwner(owner, "ANCHOR_TOP")
 
     if pet.present then
@@ -398,12 +428,15 @@ end
 --------------------------------------------------------------------------------
 
 local ShowMenu -- defined with the menu, below
+local UpdateReadout, NudgeBar -- defined with the Edit Mode code, below
 
--- Tells the settings page (BeastXP_Options.lua) that a setting changed, from
--- wherever it was changed: the page, the right-click menu, a slash command or
--- a drag. The page only redraws while it is open.
+-- Tells the settings page (BeastXP_Options.lua) and the X and Y shown in
+-- Edit Mode that a setting changed, from wherever it was changed: the page,
+-- the right-click menu, a slash command, a drag or an arrow key. Each only
+-- redraws while it is showing.
 local function NotifyChanged()
     if ns.OnSettingsChanged then ns.OnSettingsChanged() end
+    UpdateReadout()
 end
 
 local function SaveLayout()
@@ -493,8 +526,26 @@ local function ApplyTexture(frame)
     ApplyColor(frame)
 end
 
+-- The bar moves and resizes while it is unlocked, and while the game's Edit
+-- Mode is open whatever the lock says.
+local function CanMove()
+    return editing or not db.locked
+end
+
+-- The grip shows while the bar can be resized, the highlight while Edit Mode
+-- is open. The arrow keys listen only while Edit Mode is open, and step aside
+-- for combat, where they could no longer pass keys on to the game.
 local function ApplyLock()
-    bar.grip:SetShown(not db.locked)
+    bar.grip:SetShown(CanMove())
+    bar.highlight:SetShown(editing)
+    local nudger = bar.nudger
+    if editing then
+        nudger:RegisterEvent("PLAYER_REGEN_DISABLED")
+        nudger:RegisterEvent("PLAYER_REGEN_ENABLED")
+        nudger:SetShown(not InCombatLockdown())
+    else
+        nudger:UnregisterAllEvents()
+    end
 end
 
 -- Ends a drag or a resize and remembers where the bar ended up. Also runs on
@@ -503,7 +554,16 @@ local function StopMoving()
     if not moving then return end
     moving = false
     bar:StopMovingOrSizing()
+    bar.highlight:SetScript("OnUpdate", nil)
     SaveLayout()
+end
+
+-- Starts a drag or a resize. In Edit Mode the X and Y follow the bar every
+-- frame until it is let go, since the saved position only changes then.
+local function StartMoving(resize)
+    moving = true
+    if resize then bar:StartSizing("BOTTOMRIGHT") else bar:StartMoving() end
+    if editing then bar.highlight:SetScript("OnUpdate", UpdateReadout) end
 end
 
 local function EnsureBar()
@@ -528,9 +588,8 @@ local function EnsureBar()
     grip:SetHighlightTexture(GRIP_TEXTURE .. "-Highlight")
     grip:SetPushedTexture(GRIP_TEXTURE .. "-Down")
     grip:SetScript("OnMouseDown", function(_, button)
-        if button ~= "LeftButton" or db.locked then return end
-        moving = true
-        bar:StartSizing("BOTTOMRIGHT")
+        if button ~= "LeftButton" or not CanMove() then return end
+        StartMoving(true)
     end)
     grip:SetScript("OnMouseUp", StopMoving)
     grip:SetScript("OnEnter", function(self)
@@ -542,10 +601,46 @@ local function EnsureBar()
     grip:SetScript("OnLeave", function() GameTooltip:Hide() end)
     bar.grip = grip
 
-    bar:SetScript("OnDragStart", function(self)
-        if db.locked then return end
-        moving = true
-        self:StartMoving()
+    -- While the game's Edit Mode is open the bar is laid over in its light
+    -- blue, with its name and its X and Y above it. Above the fill, below the
+    -- grip, and taking no clicks, so the bar under it still drags.
+    local highlight = CreateFrame("Frame", nil, bar)
+    highlight:SetAllPoints(bar)
+    highlight:SetFrameLevel(bar.status:GetFrameLevel() + 1)
+    local wash = highlight:CreateTexture(nil, "OVERLAY")
+    wash:SetAllPoints(highlight)
+    wash:SetColorTexture(unpack(EDIT_MODE_COLOR))
+    local name = highlight:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    name:SetPoint("BOTTOMLEFT", highlight, "TOPLEFT", 0, 3)
+    name:SetText(addonName)
+    local readout = highlight:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    readout:SetPoint("LEFT", name, "RIGHT", 8, 0)
+    readout:SetTextColor(unpack(READOUT_COLOR))
+    bar.readout = readout
+    highlight:Hide()
+    bar.highlight = highlight
+
+    -- The arrow keys, the way EllesmereUI's unlock mode takes them: a frame
+    -- above Edit Mode's own dialogs sees each key first, keeps an arrow while
+    -- the mouse is over the bar, and passes every other key on to the game,
+    -- Edit Mode's own arrow keys included. A child of the highlight, so it is
+    -- only there while Edit Mode is open; ApplyLock hides it for combat.
+    local nudger = CreateFrame("Frame", nil, highlight)
+    nudger:SetFrameStrata("FULLSCREEN_DIALOG")
+    nudger:EnableKeyboard(true)
+    nudger:SetPropagateKeyboardInput(true)
+    nudger:SetScript("OnKeyDown", function(self, key)
+        if InCombatLockdown() then return end
+        self:SetPropagateKeyboardInput(not (bar:IsMouseOver() and NudgeBar(key)))
+    end)
+    nudger:SetScript("OnEvent", function(self, event)
+        self:SetShown(event == "PLAYER_REGEN_ENABLED")
+    end)
+    bar.nudger = nudger
+
+    bar:SetScript("OnDragStart", function()
+        if not CanMove() then return end
+        StartMoving(false)
     end)
     bar:SetScript("OnDragStop", StopMoving)
     bar:SetScript("OnHide", StopMoving)
@@ -563,12 +658,12 @@ local function EnsureBar()
 end
 
 -- The one place the bar is updated. It shows while a hunter pet is out, and
--- also while the bar is unlocked, so it can be placed before there is a pet.
+-- also while the bar can be moved, so it can be placed before there is a pet.
 local function Refresh()
     if not active then return end
     ReadPet()
 
-    if not pet.present and db.locked then
+    if not pet.present and not CanMove() then
         if bar then bar:Hide() end
         return
     end
@@ -587,6 +682,19 @@ local function Refresh()
     if GameTooltip:IsShown() and GameTooltip:GetOwner() == frame then
         ShowTooltip(frame)
     end
+end
+
+-- The game's Edit Mode opening or closing. An addon cannot join Edit Mode
+-- itself, but it is told when it opens and closes: while it is open the bar
+-- shows, even without a pet, highlighted and free to move and resize, and
+-- closing it puts everything back as the settings have it. The bar keeps its
+-- own saved position either way.
+local function SetEditing(open)
+    editing = open
+    StopMoving()
+    if bar then ApplyLock() end
+    Refresh()
+    UpdateReadout()
 end
 
 --------------------------------------------------------------------------------
@@ -696,6 +804,65 @@ local function SetBarSize(width, height)
     db.height = Clamp(Round(height), MIN_HEIGHT, MAX_HEIGHT)
     if bar then bar:SetSize(db.width, db.height) end
     NotifyChanged()
+end
+
+-- The bar's size as it is drawn: the saved one, inside the bounds.
+local function DrawnSize()
+    return Clamp(db.width, MIN_WIDTH, MaxWidth()), Clamp(db.height, MIN_HEIGHT, MAX_HEIGHT)
+end
+
+-- Where the bar sits, as X and Y: its centre's distance from the centre of
+-- the screen, right and up. Worked out from the saved anchor, whichever point
+-- a drag left it on. These are the numbers the settings page and
+-- /petxp position show and take.
+local function BarPosition()
+    if not db.point then return DEFAULT_X, DEFAULT_Y end
+    local point, relative = POINT_OFFSETS[db.point], POINT_OFFSETS[db.relativePoint]
+    local width, height = DrawnSize()
+    return Round(relative[1] * UIParent:GetWidth() + db.x - point[1] * width),
+        Round(relative[2] * UIParent:GetHeight() + db.y - point[2] * height)
+end
+
+-- How far X and Y can go with the whole bar still on screen.
+local function PositionLimits()
+    local width, height = DrawnSize()
+    return math.max(0, math.floor((UIParent:GetWidth() - width) / 2)),
+        math.max(0, math.floor((UIParent:GetHeight() - height) / 2))
+end
+
+-- Moves the bar to an X and Y, kept on screen, by anchoring its centre to the
+-- screen's.
+local function SetBarPosition(x, y)
+    local maxX, maxY = PositionLimits()
+    db.point, db.relativePoint = "CENTER", "CENTER"
+    db.x, db.y = Clamp(Round(x), -maxX, maxX), Clamp(Round(y), -maxY, maxY)
+    if bar then ApplyLayout() end
+    NotifyChanged()
+end
+
+-- Edit Mode's X and Y beside the bar's name. They come from where the bar is
+-- drawn, so they follow a drag; the saved position only changes when it ends.
+function UpdateReadout()
+    if not (bar and editing) then return end
+    local x, y = bar:GetCenter()
+    local centerX, centerY = UIParent:GetCenter()
+    if x and centerX then
+        x, y = Round(x - centerX), Round(y - centerY)
+    else
+        x, y = BarPosition()
+    end
+    bar.readout:SetText(("X %d   Y %d"):format(x, y))
+end
+
+-- Moves the bar a step for an arrow key, ten with Shift. False for any other
+-- key, which the caller passes on to the game.
+function NudgeBar(key)
+    local direction = NUDGE_KEYS[key]
+    if not direction then return false end
+    local step = IsShiftKeyDown() and NUDGE_SHIFT_STEP or NUDGE_STEP
+    local x, y = BarPosition()
+    SetBarPosition(x + direction[1] * step, y + direction[2] * step)
+    return true
 end
 
 local function ResetLayout()
@@ -854,6 +1021,9 @@ local HELP = {
     "/petxp - open the settings page (also under Options, AddOns)",
     "/petxp lock - lock the bar (it hides while no pet is out)",
     "/petxp unlock - unlock it to move and resize it",
+    "/petxp width <number> - the bar's width, from " .. MIN_WIDTH .. " to nearly the screen's width",
+    "/petxp height " .. MIN_HEIGHT .. "-" .. MAX_HEIGHT .. " - the bar's height",
+    "/petxp position <x> <y> - where the bar sits, measured from the center of the screen",
     "/petxp tooltip on | off - the tooltip when you hover over the bar",
     "/petxp texture <name> - for example blizzard, solid or a LibSharedMedia texture",
     "/petxp color - pick the bar color, or give purple | blue | green | a hex code like 33aaff",
@@ -925,6 +1095,31 @@ SlashCmdList["BEASTXP"] = function(msg)
     elseif command == "lock" or command == "unlock" then
         SetLocked(command == "lock")
         Print(db.locked and "bar locked." or "bar unlocked: drag it to move it, drag its corner to resize it.")
+    elseif command == "width" or command == "height" then
+        local size = tonumber(word:match("^%d+$") or "")
+        if size and command == "width" then
+            SetBarSize(size, db.height)
+        elseif size then
+            SetBarSize(db.width, size)
+        end
+        if size then
+            Print(("bar size set to %d x %d."):format(Round(db.width), Round(db.height)))
+        elseif command == "width" then
+            Print(("give a width from %d to %d, for example /petxp width 240.")
+                :format(MIN_WIDTH, math.floor(MaxWidth())))
+        else
+            Print(("give a height from %d to %d, for example /petxp height 18.")
+                :format(MIN_HEIGHT, MAX_HEIGHT))
+        end
+    elseif command == "position" then
+        local x, y = word:match("^(%-?%d+)%s+(%-?%d+)$")
+        if x then
+            SetBarPosition(tonumber(x), tonumber(y))
+            Print(("bar moved to %d, %d from the center of the screen."):format(BarPosition()))
+        else
+            Print(("the bar is at %d, %d from the center of the screen. Give two numbers to move it, for example /petxp position 0 -180.")
+                :format(BarPosition()))
+        end
     elseif command == "tooltip" then
         if word == "on" or word == "off" then
             SetShowTooltip(word == "on")
@@ -1042,6 +1237,13 @@ ns.API = {
     SetLocked = SetLocked,
     SetShowTooltip = SetShowTooltip,
     SetBarSize = SetBarSize,
+    BarPosition = BarPosition,
+    SetBarPosition = SetBarPosition,
+    -- The X and Y sliders reach the edges of the screen; the setter keeps
+    -- the whole bar on it.
+    PositionRange = function()
+        return math.floor(UIParent:GetWidth() / 2), math.floor(UIParent:GetHeight() / 2)
+    end,
     SetTexturePath = SetTexturePath,
     SetBarColor = SetBarColor,
     OpenColorPicker = OpenColorPicker,
@@ -1114,6 +1316,13 @@ events:SetScript("OnEvent", function(self, event, unit)
         active = true
         for _, name in ipairs(PET_EVENTS) do
             pcall(self.RegisterEvent, self, name)
+        end
+        -- The game's Edit Mode says when it opens and closes through the
+        -- EventRegistry, which calls back through securecallfunction, so the
+        -- bar's code cannot taint Edit Mode's.
+        if EventRegistry and EventRegistry.RegisterCallback then
+            EventRegistry:RegisterCallback("EditMode.Enter", function() SetEditing(true) end, self)
+            EventRegistry:RegisterCallback("EditMode.Exit", function() SetEditing(false) end, self)
         end
         Refresh()
         return

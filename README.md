@@ -16,12 +16,17 @@ QuestForever lay out theirs:
 
 - **Preview**: a copy of the bar, since the settings window usually covers the real one. It shows
   your pet when one is out and a sample pet otherwise.
-- **Bar**: *Lock bar*, *Show tooltip*, *Width* and *Height* sliders, *Texture*, *Color* (click the
-  swatch for the color picker, or pick a preset), and *Reset position*.
+- **Bar**: *Lock bar*, *Show tooltip*, *Width* and *Height*, *X position* and *Y position* (drag the
+  slider, or type an exact number in the box beside it and press Enter), *Reset position*,
+  *Texture*, and *Color* (click the swatch for the color picker, or pick a preset). X and Y measure
+  the bar's center from the center of the screen: X to the right, Y up, and below 0 the other way.
+  The bar is kept whole on the screen.
 - **Text**: the text style, *Loyalty* and *Training points*, *Font*, a *Font size* slider and
   *Outline*.
 - **Defaults** (top right) puts every setting back to how a fresh install has it, but leaves the bar
   where it is. It asks for a second click first.
+
+When the settings window is too short for every row, the page scrolls under its title.
 
 Every change shows on the bar at once. The page, the right-click menu and the slash commands all
 change the same settings, so a change made in one shows in the others. In combat the game will not
@@ -50,6 +55,14 @@ The bar starts **unlocked** on a fresh install, so you can put it where you want
   a pet, so you can place it.
 - **Tooltip**: right-click the bar and untick *Show tooltip*, and hovering over the bar or its grip
   shows nothing. It is on for a fresh install.
+- **Edit Mode**: open the game's own *Edit Mode* (Esc menu) and the bar joins in: it shows even
+  without a pet, lit up in Edit Mode's blue with its name and its X and Y above it, and can be
+  dragged and resized even while locked. The X and Y follow the bar as you drag. Hover the bar and
+  press the arrow keys to move it 1 at a time, or 10 with Shift; every other key, and the arrow keys
+  anywhere else, work as usual, so Edit Mode's own arrow keys still move its frames. Closing Edit
+  Mode puts the bar back as your settings have it, locked again if it was. An addon cannot become
+  part of Edit Mode itself, so the bar does not snap to Edit Mode's grid and keeps its position in
+  BeastXP's own settings.
 
 The same options as slash commands, under `/beastxp` or `/petxp` for short. A texture or font is
 found by its name or any part of it:
@@ -58,6 +71,9 @@ found by its name or any part of it:
 /petxp                    opens the settings page
 /petxp help               lists these commands
 /petxp lock | unlock
+/petxp width <number>     from 80 to nearly the screen's width
+/petxp height 6-64
+/petxp position <x> <y>   from the center of the screen, for example: 0 -180
 /petxp tooltip on | off
 /petxp texture <name>     for example: blizzard, solid, skills
 /petxp color              opens the color picker
@@ -98,7 +114,8 @@ Install it from CurseForge, or copy `BeastXP.toc`, `BeastXP.lua` and `BeastXP_Op
 - Settings live in the account-wide `BeastXPDB`. The Forever beta writes a per-character
   SavedVariables file but never loads it back. Every setting applies immediately, with no reload.
 - Event-driven: the bar refreshes on `UNIT_PET`, `UNIT_PET_EXPERIENCE`, `UNIT_LEVEL`,
-  `PET_UI_UPDATE`, `PLAYER_XP_UPDATE` and `PLAYER_ENTERING_WORLD`, never from `OnUpdate`.
+  `PET_UI_UPDATE`, `PLAYER_XP_UPDATE` and `PLAYER_ENTERING_WORLD`, never from `OnUpdate`. The one
+  exception is a drag in Edit Mode, where the X and Y follow the bar until it is let go.
   `UNIT_HAPPINESS` and `UNIT_PET_TRAINING_POINTS` keep loyalty and training points current, on the
   bar and in an open tooltip.
 - Loyalty and training points come from `C_PetInfo`, read the way the game's own pet panel and

@@ -1,5 +1,12 @@
 # BeastXP
 
+## 1.2.0
+
+- Type an exact width and height in the boxes beside the settings page's sliders, or use `/petxp width` and `/petxp height`.
+- New X position and Y position settings place the bar exactly, measured from the center of the screen, with a slider and a box each, or `/petxp position <x> <y>`.
+- The bar joins the game's Edit Mode: while Edit Mode is open it shows even without a pet, highlighted with its X and Y, and can be dragged and resized even when locked. Hover it and use the arrow keys to move it 1 at a time, or 10 with Shift. Closing Edit Mode puts it back the way it was.
+- Fixed: the settings page no longer runs past the bottom of the settings window. When it doesn't fit, it scrolls.
+
 ## 1.1.0
 
 - The tooltip now shows your pet's loyalty rank, whether it is gaining or losing loyalty, and its unspent training points.
