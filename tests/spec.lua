@@ -158,6 +158,38 @@ test("the tooltip shows the pet's loyalty and unspent training points", function
     assert_false(has_line(GameTooltip.__lines, "Loyalty | "), "an empty loyalty line")
 end)
 
+test("the tooltip shows the pet's happiness as the pet panel words it", function()
+    __boot({ pet = hunterPet({ loyalty = "Faithful" }) })
+    __script(BeastXPBar, "OnEnter")
+    local lines = GameTooltip.__lines
+    assert_true(has_line(lines, "Happiness | Happy"), "no happiness line")
+    local loyaltyAt, happinessAt
+    for index, line in ipairs(lines) do
+        if line == "Loyalty | Faithful" then loyaltyAt = index end
+        if line == "Happiness | Happy" then happinessAt = index end
+    end
+    assert_true(loyaltyAt and happinessAt > loyaltyAt, "happiness not after loyalty")
+
+    -- The open tooltip follows the pet's mood, but only the pet's.
+    __pet.happiness = 1
+    __fire("UNIT_HAPPINESS", "target")
+    assert_true(has_line(GameTooltip.__lines, "Happiness | Happy"), "another unit's mood was read")
+    __fire("UNIT_HAPPINESS", "pet")
+    assert_true(has_line(GameTooltip.__lines, "Happiness | Unhappy"), "unhappy not shown")
+    __pet.happiness = 2
+    __fire("UNIT_HAPPINESS", "pet")
+    assert_true(has_line(GameTooltip.__lines, "Happiness | Content"), "content not shown")
+
+    -- A mood the client does not name is left out.
+    for _, mood in ipairs({ 0, 4, 0 / 0, "Happy" }) do
+        __pet.happiness = mood
+        __fire("UNIT_HAPPINESS", "pet")
+        for _, line in ipairs(GameTooltip.__lines) do
+            assert_false(line:find("Happiness", 1, true), "unknown mood " .. tostring(mood) .. " shown")
+        end
+    end
+end)
+
 test("a client without pet info leaves loyalty and training points out", function()
     local saved = C_PetInfo
     C_PetInfo = nil
@@ -169,7 +201,8 @@ test("a client without pet info leaves loyalty and training points out", functio
     assert_true(ok, tostring(err))
     assert_true(has_line(GameTooltip.__lines, "Experience | 340 / 2150"), "tooltip lost its experience")
     for _, line in ipairs(GameTooltip.__lines) do
-        assert_false(line:find("Loyalty", 1, true) or line:find("Training", 1, true), "unexpected " .. line)
+        assert_false(line:find("Loyalty", 1, true) or line:find("Happiness", 1, true)
+            or line:find("Training", 1, true), "unexpected " .. line)
     end
 end)
 
@@ -543,6 +576,52 @@ test("the menu's Show tooltip entry turns the tooltip off and on", function()
     assert_true(BeastXPDB.showTooltip, "not turned back on")
 end)
 
+test("text in a font file that arrives late is drawn again once it is in", function()
+    -- An addon's font, the first time it is used after the game starts. As
+    -- at a real login the pet shows up after the loading screen, and the bar
+    -- is built then.
+    local font = "Interface\\AddOns\\FlorenziMedia\\fonts\\IBMPlexSans-Medium.ttf"
+    __boot({ db = { fontPath = font, locked = true }, loadingFonts = { font } })
+    __fire("PLAYER_ENTERING_WORLD")
+    assert_eq(BeastXPBar, nil, "a locked bar built before the pet was out")
+    __pet = hunterPet()
+    __fire("UNIT_PET", "player")
+    local text = BeastXPBar.text
+    assert_eq(select(1, text:GetFont()), "Fonts\\FRIZQT__.TTF", "no fallback while the file loads")
+    assert_eq(__drawn_text(text), "Level 14   340 / 2150  (15%)", "nothing drawn in the fallback")
+
+    -- The file arrives and the game switches the string to it, drawing
+    -- nothing. The same text set again does not help.
+    __fonts_loaded()
+    assert_eq(select(1, text:GetFont()), font)
+    __fire("UNIT_HAPPINESS", "pet")
+    assert_eq(__drawn_text(text), nil, "the stub does not blank the text")
+
+    -- The bar looks again a moment later and draws its text afresh.
+    __advance(0.25)
+    assert_eq(__drawn_text(text), "Level 14   340 / 2150  (15%)", "the text stayed blank")
+    assert_eq(select(1, text:GetFont()), font, "the chosen font was not kept")
+    assert_eq(__pending_timers(), 0, "still looking after the font arrived")
+end)
+
+test("a font file that never loads is waited for ten seconds, then left", function()
+    local font = "Interface\\AddOns\\Gone\\font.ttf"
+    __boot({ pet = hunterPet(), db = { fontPath = font }, loadingFonts = { font } })
+    __advance(9.5)
+    assert_eq(__pending_timers(), 1, "stopped waiting too soon")
+    __advance(0.5)
+    assert_eq(__pending_timers(), 0, "still waiting after ten seconds")
+    assert_eq(select(1, BeastXPBar.text:GetFont()), "Fonts\\FRIZQT__.TTF")
+    assert_eq(__drawn_text(BeastXPBar.text), "Level 14   340 / 2150  (15%)")
+
+    -- A font that is already in needs no waiting at all, and picking one
+    -- stops the wait for the last.
+    __boot({ pet = hunterPet(), db = { fontPath = font }, loadingFonts = { font } })
+    SlashCmdList.BEASTXP("font arial")
+    assert_eq(__pending_timers(), 0, "a loaded font is waited for")
+    assert_eq(select(1, BeastXPBar.text:GetFont()), "Fonts\\ARIALN.TTF")
+end)
+
 test("a font file that fails to load falls back to the default font", function()
     __boot({ pet = hunterPet() })
     __badFonts["fonts\\skurri.ttf"] = true
@@ -845,6 +924,48 @@ test("loyalty and training points can follow any text style", function()
     assert_eq(BeastXPBar.text:GetText(), "No pet")
 end)
 
+test("happiness follows loyalty in the text, and follows the pet's mood", function()
+    __boot({ pet = hunterPet({ loyalty = "Faithful", training = { 120, 95 } }) })
+    assert_eq(BeastXPDB.textHappiness, false, "happiness on for a fresh install")
+
+    SlashCmdList.BEASTXP("happiness on")
+    assert_true(__printed("the bar's text shows your pet's happiness"), "no confirmation")
+    assert_eq(BeastXPBar.text:GetText(), "Level 14   340 / 2150  (15%)   Happy")
+    SlashCmdList.BEASTXP("loyalty on")
+    SlashCmdList.BEASTXP("training on")
+    assert_eq(BeastXPBar.text:GetText(), "Level 14   340 / 2150  (15%)   Faithful   Happy   25 TP")
+    SlashCmdList.BEASTXP("text percent")
+    assert_eq(BeastXPBar.text:GetText(), "15%  Faithful  Happy  25 TP")
+    SlashCmdList.BEASTXP("text none")
+    assert_eq(BeastXPBar.text:GetText(), "", "no text showed happiness")
+
+    -- The text follows the pet's mood, and leaves out one the client does not
+    -- name.
+    SlashCmdList.BEASTXP("text percent")
+    __pet.happiness = 1
+    __fire("UNIT_HAPPINESS", "pet")
+    assert_eq(BeastXPBar.text:GetText(), "15%  Faithful  Unhappy  25 TP")
+    __pet.happiness = 7
+    __fire("UNIT_HAPPINESS", "pet")
+    assert_eq(BeastXPBar.text:GetText(), "15%  Faithful  25 TP")
+
+    __pet.happiness = 2
+    SlashCmdList.BEASTXP("happy off")
+    assert_true(__printed("the bar's text leaves happiness out"), "no confirmation")
+    assert_eq(BeastXPBar.text:GetText(), "15%  Faithful  25 TP")
+    SlashCmdList.BEASTXP("happy on")
+    assert_eq(BeastXPBar.text:GetText(), "15%  Faithful  Content  25 TP")
+    SlashCmdList.BEASTXP("happiness sometimes")
+    assert_true(__printed("use /petxp happiness on"), "no usage for a bad word")
+    assert_true(BeastXPDB.textHappiness, "a bad word changed the setting")
+
+    -- The setting is saved, and a broken saved one is off.
+    __boot({ pet = hunterPet(), db = { textHappiness = true, textStyle = "percent" } })
+    assert_eq(BeastXPBar.text:GetText(), "15%  Happy", "saved setting lost")
+    __boot({ pet = hunterPet(), db = { textHappiness = "yes" } })
+    assert_eq(BeastXPDB.textHappiness, false)
+end)
+
 test("the Text menu turns loyalty and training points on and off", function()
     __boot({ pet = hunterPet({ loyalty = "Faithful", training = { 120, 95 } }) })
     __script(BeastXPBar, "OnMouseUp", "RightButton")
@@ -860,6 +981,15 @@ test("the Text menu turns loyalty and training points on and off", function()
     assert_eq(BeastXPBar.text:GetText(), "Level 14   340 / 2150  (15%)   Faithful   25 TP")
     __menu_click(points)
     assert_eq(BeastXPBar.text:GetText(), "Level 14   340 / 2150  (15%)   Faithful")
+
+    local happiness = __menu_item("Text", "Happiness")
+    assert_true(happiness, "no happiness in the Text menu")
+    assert_false(__menu_selected(happiness), "happiness on for a fresh install")
+    __menu_click(happiness)
+    assert_true(__menu_selected(happiness))
+    assert_eq(BeastXPBar.text:GetText(), "Level 14   340 / 2150  (15%)   Faithful   Happy")
+    __menu_click(happiness)
+    assert_false(BeastXPDB.textHappiness, "a second click left happiness on")
 end)
 
 test("an unknown text style is refused, and a broken saved one falls back to full", function()
@@ -929,13 +1059,14 @@ test("the page shows the current settings when it opens", function()
         db = {
             locked = true, width = 300, height = 20, fontSize = 14, outline = "OUTLINE",
             texturePath = "Interface\\Buttons\\WHITE8X8", barColor = { 0.0, 0.39, 0.88 }, textStyle = "short",
-            showTooltip = false, textLoyalty = true,
+            showTooltip = false, textLoyalty = true, textHappiness = true,
         },
     })
     open_page()
     assert_true(__control("Lock bar", "UICheckButtonTemplate"):GetChecked(), "lock not ticked")
     assert_false(__control("Show tooltip", "UICheckButtonTemplate"):GetChecked(), "tooltip ticked")
     assert_true(__control("Loyalty", "UICheckButtonTemplate"):GetChecked(), "loyalty not ticked")
+    assert_true(__control("Happiness", "UICheckButtonTemplate"):GetChecked(), "happiness not ticked")
     assert_false(__control("Training points", "UICheckButtonTemplate"):GetChecked(), "training points ticked")
     assert_eq(__control("Width", "MinimalSliderWithSteppersTemplate"):GetValue(), 300)
     assert_eq(__control("Height", "MinimalSliderWithSteppersTemplate"):GetValue(), 20)
@@ -997,6 +1128,10 @@ test("every control on the page changes the bar at once", function()
     loyalty:SetChecked(true)
     __script(loyalty, "OnClick")
     assert_true(BeastXPDB.textLoyalty, "loyalty box did not turn it on")
+    local happiness = __control("Happiness", "UICheckButtonTemplate")
+    happiness:SetChecked(true)
+    __script(happiness, "OnClick")
+    assert_eq(BeastXPBar.text:GetText(), "15%  Happy  0 TP", "happiness box did not add it")
 
     __dropdown_pick(__control("Font", "WowStyle1DropdownTemplate"), "Arial Narrow")
     __control("Font size", "MinimalSliderWithSteppersTemplate"):SetValue(16)
@@ -1165,10 +1300,17 @@ test("the preview copies the bar, with a sample pet when none is out", function(
     SlashCmdList.BEASTXP("loyalty on")
     SlashCmdList.BEASTXP("training on")
     assert_eq(preview.text:GetText(), "60%  Faithful  25 TP", "sample loyalty or training points missing")
+    SlashCmdList.BEASTXP("happiness on")
+    assert_eq(preview.text:GetText(), "60%  Faithful  Happy  25 TP", "sample happiness missing")
 
     __boot({ pet = hunterPet() })
     open_page()
     assert_eq(__control("Preview", nil, "Frame").text:GetText(), "Level 14   340 / 2150  (15%)", "real pet not shown")
+
+    -- With a pet out, the preview shows that pet's mood.
+    __boot({ pet = hunterPet({ happiness = 2 }), db = { textStyle = "percent", textHappiness = true } })
+    open_page()
+    assert_eq(__control("Preview", nil, "Frame").text:GetText(), "15%  Content", "real pet's mood not shown")
 end)
 
 test("Defaults takes two clicks and leaves the bar where it is", function()
@@ -1209,6 +1351,25 @@ test("the page's Reset position puts the bar back", function()
     assert_eq(BeastXPDB.point, nil)
     assert_eq(BeastXPBar:GetWidth(), 240)
     assert_eq(__control("Width", "MinimalSliderWithSteppersTemplate"):GetValue(), 240)
+end)
+
+test("the menu and the settings page show the version the toc names", function()
+    __boot({ pet = hunterPet(), version = "v1.3.0" })
+    __script(BeastXPBar, "OnMouseUp", "RightButton")
+    local title = __menu.children[1]
+    assert_eq(title.kind, "title")
+    assert_eq(title.text, "BeastXP v1.3.0", "menu title without the version")
+    open_page()
+    assert_true(__page_text("BeastXP"), "page title gone")
+    assert_true(__page_text("v1.3.0"), "no version on the settings page")
+
+    -- Straight from the repository the toc holds the packager's placeholder,
+    -- which is not shown.
+    __boot({ pet = hunterPet() })
+    __script(BeastXPBar, "OnMouseUp", "RightButton")
+    assert_eq(__menu.children[1].text, "BeastXP", "placeholder shown in the menu")
+    open_page()
+    assert_false(__page_text("@project-version@"), "placeholder shown on the page")
 end)
 
 test("without the client's settings window, /petxp says so", function()
@@ -1285,6 +1446,7 @@ test("slash commands change the same settings", function()
     SlashCmdList.BEASTXP("help")
     assert_true(__printed("/petxp unlock"), "no help")
     assert_true(__printed("open the settings page"), "help does not mention the settings page")
+    assert_true(__printed("/petxp happiness on | off"), "help does not mention happiness")
 end)
 
 test("the slash command answers to /beastxp and /petxp", function()
@@ -1346,12 +1508,15 @@ end)
 
 test("secret values from the game never raise an error", function()
     __boot({ pet = { current = __secret(), max = __secret(), level = __secret(), name = __secret(),
-        loyalty = __secret(), loyaltyRate = __secret(), training = { __secret(), __secret() } } })
+        loyalty = __secret(), loyaltyRate = __secret(), happiness = __secret(),
+        training = { __secret(), __secret() } },
+        db = { textLoyalty = true, textHappiness = true, textTraining = true } })
     assert_eq(BeastXPBar.text:GetText(), "Pet")
     __script(BeastXPBar, "OnEnter")
     assert_true(has_line(GameTooltip.__lines, "Your pet"), "secret name shown")
     for _, line in ipairs(GameTooltip.__lines) do
-        assert_false(line:find("Loyalty", 1, true) or line:find("Training", 1, true), "secret shown: " .. line)
+        assert_false(line:find("Loyalty", 1, true) or line:find("Happiness", 1, true)
+            or line:find("Training", 1, true), "secret shown: " .. line)
     end
     __fire("UNIT_PET", __secret())
     __fire("UNIT_LEVEL", __secret())

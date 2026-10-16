@@ -1,5 +1,12 @@
 # BeastXP
 
+## 1.3.0
+
+- The tooltip now shows your pet's happiness, in the words the game's pet panel uses: Happy, Content or Unhappy.
+- A new Happiness text option adds it to the bar too, between the loyalty rank and the training points, for example "15%  Faithful  Happy  25 TP". It is off until you tick it, in the right-click Text menu, on the settings page, or with `/petxp happiness on`.
+- The right-click menu and the settings page show which version of BeastXP you have.
+- Fixed: with a font from another addon, the bar's text no longer stays blank after logging in until your pet gains experience.
+
 ## 1.2.0
 
 - Type an exact width and height in the boxes beside the settings page's sliders, or use `/petxp width` and `/petxp height`.

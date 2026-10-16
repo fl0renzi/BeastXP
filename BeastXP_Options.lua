@@ -216,11 +216,12 @@ local function UpdatePreview()
     API.ApplyTexture(preview)
     API.ApplyFont(preview)
 
-    local level, current, max, loyalty, points = API.PreviewPet()
+    local level, current, max, loyalty, happiness, points = API.PreviewPet()
     preview.status:SetMinMaxValues(0, max > 0 and max or 1)
     preview.status:SetValue(math.min(current, max))
     preview.text:SetText(API.FormatText(db.textStyle, true, level, current, max,
-        db.textLoyalty and loyalty or nil, db.textTraining and points or nil))
+        db.textLoyalty and loyalty or nil, db.textHappiness and happiness or nil,
+        db.textTraining and points or nil))
 end
 
 local function RefreshPage()
@@ -229,6 +230,7 @@ local function RefreshPage()
     controls.lock:SetChecked(db.locked)
     controls.tooltip:SetChecked(db.showTooltip)
     controls.textLoyalty:SetChecked(db.textLoyalty)
+    controls.textHappiness:SetChecked(db.textHappiness)
     controls.textTraining:SetChecked(db.textTraining)
     controls.width:SetValue(db.width)
     controls.height:SetValue(db.height)
@@ -264,6 +266,14 @@ local function BuildHeader()
     title:SetJustifyH("LEFT")
     title:SetText(PAGE_TITLE)
 
+    -- The version beside the title, small and grey, when the toc names one.
+    if API.Version then
+        local version = page:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
+        version:SetPoint("BOTTOMLEFT", title, "BOTTOMRIGHT", 8, 2)
+        version:SetTextColor(0.5, 0.5, 0.5)
+        version:SetText(API.Version)
+    end
+
     local divider = page:CreateTexture(nil, "ARTWORK")
     divider:SetAtlas("Options_HorizontalDivider", true)
     divider:SetPoint("TOP", 0, -HEADER_HEIGHT)
@@ -295,7 +305,7 @@ local function BuildBarSection()
     Tooltip(controls.lock, "A locked bar cannot be moved or resized, and hides while no pet is out. The game's Edit Mode can still move it.")
 
     controls.tooltip = Checkbox(Row("Show tooltip"), API.SetShowTooltip)
-    Tooltip(controls.tooltip, "Hovering over the bar shows your pet's name, the experience it still needs, its loyalty and its training points.")
+    Tooltip(controls.tooltip, "Hovering over the bar shows your pet's name, the experience it still needs, its loyalty, its happiness and its training points.")
 
     -- Drag the slider, or type the exact size into the box beside it.
     local function SetWidth(value) API.SetBarSize(value, API.GetDB().height) end
@@ -376,6 +386,8 @@ local function BuildTextSection()
 
     controls.textLoyalty = Checkbox(Row("Loyalty"), API.SetTextLoyalty)
     Tooltip(controls.textLoyalty, "Adds your pet's loyalty rank after the text.")
+    controls.textHappiness = Checkbox(Row("Happiness"), API.SetTextHappiness)
+    Tooltip(controls.textHappiness, "Adds your pet's happiness after the text, for example Happy or Unhappy.")
     controls.textTraining = Checkbox(Row("Training points"), API.SetTextTraining)
     Tooltip(controls.textTraining, "Adds your pet's unspent training points after the text, for example 25 TP.")
 

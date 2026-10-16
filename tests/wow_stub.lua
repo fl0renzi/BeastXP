@@ -71,6 +71,68 @@ end
 __interface = 16001
 function GetBuildInfo() return "1.60.1", "69893", "Sep 18 2026", __interface end
 
+-- C_Timer on a clock the tests move with __advance. A ticker runs its
+-- callback every interval until cancelled, or for its number of iterations.
+__now = 0
+local timers = {}
+
+local function schedule(delay, callback, iterations)
+    local timer = { due = __now + delay, interval = delay, callback = callback, left = iterations }
+    function timer:Cancel() self.cancelled = true end
+    function timer:IsCancelled() return self.cancelled == true end
+    timers[#timers + 1] = timer
+    return timer
+end
+
+C_Timer = {
+    After = function(delay, callback) schedule(delay, callback, 1) end,
+    NewTicker = function(interval, callback, iterations) return schedule(interval, callback, iterations) end,
+}
+
+function __advance(seconds)
+    local target = __now + seconds
+    while true do
+        local nextTimer
+        for _, timer in ipairs(timers) do
+            if not timer.cancelled and timer.due <= target and (not nextTimer or timer.due < nextTimer.due) then
+                nextTimer = timer
+            end
+        end
+        if not nextTimer then break end
+        __now = nextTimer.due
+        nextTimer.callback(nextTimer)
+        if nextTimer.left then
+            nextTimer.left = nextTimer.left - 1
+            if nextTimer.left <= 0 then nextTimer.cancelled = true end
+        end
+        nextTimer.due = nextTimer.due + nextTimer.interval
+    end
+    __now = target
+end
+
+-- The timers still waiting to run.
+function __pending_timers()
+    local count = 0
+    for _, timer in ipairs(timers) do
+        if not timer.cancelled then count = count + 1 end
+    end
+    return count
+end
+
+function __reset_timers()
+    timers = {}
+    __now = 0
+end
+
+-- The toc's Version line. The repository's toc holds the packager's
+-- placeholder; a test names a release to see it shown.
+__version = "@project-version@"
+C_AddOns = {
+    GetAddOnMetadata = function(name, field)
+        if name == "BeastXP" and field == "Version" then return __version end
+    end,
+}
+
 __class = "HUNTER"
 function UnitClass(unit)
     if unit == "player" then return "Hunter", __class, 3 end
@@ -100,15 +162,16 @@ function UnitName(unit)
 end
 
 -- Forever's pet info. A pet may also carry loyalty (the text the character
--- frame shows), loyaltyRate (above 0 while gaining loyalty, below 0 while
--- losing it) and training = { total, used }.
+-- frame shows), happiness (1 unhappy, 2 content, 3 happy, 3 when left out),
+-- loyaltyRate (above 0 while gaining loyalty, below 0 while losing it) and
+-- training = { total, used }.
 C_PetInfo = {
     GetPetLoyalty = function()
         if __pet and __pet.loyalty then return __pet.loyalty end
     end,
     GetPetHappiness = function()
         if not __pet then return end
-        return 3, 125, __pet.loyaltyRate or 0
+        return __pet.happiness or 3, 125, __pet.loyaltyRate or 0
     end,
     GetPetTrainingPoints = function()
         local training = __pet and __pet.training
@@ -124,6 +187,10 @@ C_PetInfo = {
 -- Font files the client cannot load. SetFont returns false for these and, as
 -- the worst case, leaves the font string with no font at all.
 __badFonts = {}
+
+-- Font files the client is still loading, as an addon's font is the first
+-- time something uses it after the game starts.
+__loadingFonts = {}
 
 -- Texture files the client cannot load: setting one returns false.
 __badTextures = {}
@@ -242,21 +309,50 @@ function methods:SetVertexColor(...) self.__vertexColor = { ... } end
 
 -- FontString
 function methods:SetFontObject(object) self.__font = fontOf(object) and { unpack(fontOf(object)) } end
+-- What a font string draws (__drawn) is laid out when its font or its text
+-- changes; the same text set again changes nothing. A font file still loading
+-- (__loadingFonts) is what the probe in the Forever client showed: SetFont
+-- returns false and the string keeps the font it had, and when the file
+-- arrives (__fonts_loaded) the string switches to it by itself, without
+-- laying the text out again, so it draws nothing until the text or the font
+-- next changes.
+local function layOut(fontString)
+    fontString.__drawn = fontString.__text
+end
+
+local pendingFonts = {} -- font strings waiting for a file, by font string
+
 function methods:SetFont(path, size, flags)
     if type(flags) ~= "string" then error("SetFont: flags must be a string") end
     if __badFonts[path:lower()] then
         self.__font = nil
         return false
     end
+    if __loadingFonts[path:lower()] then
+        pendingFonts[self] = { path, size, flags }
+        return false
+    end
     self.__font = { path, size, flags }
+    layOut(self)
     return true
+end
+
+function __fonts_loaded()
+    __loadingFonts = {}
+    for fontString, font in pairs(pendingFonts) do
+        fontString.__font = font
+        fontString.__drawn = nil
+    end
+    pendingFonts = {}
 end
 function methods:GetFont()
     if self.__font then return unpack(self.__font) end
 end
 function methods:SetText(text)
     if self.__kind == "FontString" and not self.__font then error("FontString:SetText(): Font not set") end
+    if text == self.__text then return end
     self.__text = text
+    layOut(self)
 end
 function methods:GetText() return self.__text end
 function methods:SetTextColor(r, g, b, a) self.__textColor = { r, g, b, a } end
@@ -495,6 +591,20 @@ function __page_button(text)
     error("no button " .. tostring(text))
 end
 
+-- What a font string shows on screen, which is nothing after the game
+-- switched it to a font file that arrived late.
+function __drawn_text(fontString) return fontString.__drawn end
+
+-- The text on the settings page that says exactly this, or nil.
+function __page_text(text)
+    local page = __settings_page()
+    for _, widget in ipairs(frames) do
+        if widget.__kind == "FontString" and widget.__text == text and widget.__parent == page then
+            return widget
+        end
+    end
+end
+
 -- Calls a widget's script handler the way the game would.
 function __script(widget, name, ...)
     local handler = widget.__scripts[name]
@@ -704,9 +814,14 @@ function __boot(options)
 
     __output = {}
     __interface = options.interface or 16001
+    __version = options.version or "@project-version@"
     __class = options.class or "HUNTER"
     __pet = options.pet
     __badFonts = {}
+    __loadingFonts = {}
+    pendingFonts = {}
+    for _, path in ipairs(options.loadingFonts or {}) do __loadingFonts[path:lower()] = true end
+    __reset_timers()
     __badTextures = {}
     for _, path in ipairs(options.badTextures or {}) do __badTextures[path:lower()] = true end
     __knownEvents = {}

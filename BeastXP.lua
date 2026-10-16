@@ -83,6 +83,18 @@ local TRACK_ALPHA = 0.25
 -- for good and bad news.
 local LABEL_COLOR = { 1.0, 0.82, 0.0 }
 local HINT_COLOR  = { 0.5, 0.5, 0.5 }
+
+-- The version the toc names, which the packager writes from the release tag,
+-- for example "v1.3.0". Run straight from the repository, the toc still holds
+-- the packager's placeholder, and there is no version to show.
+local VERSION
+do
+    local GetMetadata = C_AddOns and C_AddOns.GetAddOnMetadata or GetAddOnMetadata
+    local version = type(GetMetadata) == "function" and GetMetadata(addonName, "Version")
+    if type(version) == "string" and version ~= "" and not version:find("@", 1, true) then
+        VERSION = version
+    end
+end
 local GAIN_COLOR  = { 0.1, 1.0, 0.1 }
 local LOSS_COLOR  = { 1.0, 0.1, 0.1 }
 
@@ -145,8 +157,9 @@ local DEFAULTS = {
     outline      = "",
     textStyle    = "full",
     -- What the bar's text adds after its style.
-    textLoyalty  = false,
-    textTraining = false,
+    textLoyalty   = false,
+    textHappiness = false,
+    textTraining  = false,
 }
 
 --------------------------------------------------------------------------------
@@ -309,10 +322,11 @@ local function StyleText(style, present, level, current, max)
     return text
 end
 
--- The style's text with the loyalty rank and the training points after it,
--- when they are given, spaced the way the style spaces its own parts. No text
--- stays no text. The settings preview formats its sample pet through here too.
-local function FormatText(style, present, level, current, max, loyalty, points)
+-- The style's text with the loyalty rank, the happiness and the training
+-- points after it, when they are given, spaced the way the style spaces its
+-- own parts. No text stays no text. The settings preview formats its sample
+-- pet through here too.
+local function FormatText(style, present, level, current, max, loyalty, happiness, points)
     local text = StyleText(style, present, level, current, max)
     if style == "none" or not present then return text end
 
@@ -320,15 +334,19 @@ local function FormatText(style, present, level, current, max, loyalty, points)
     if loyalty then
         text = (text ~= "" and text .. gap or "") .. loyalty
     end
+    if happiness then
+        text = (text ~= "" and text .. gap or "") .. happiness
+    end
     if points then
         text = (text ~= "" and text .. gap or "") .. ("%d TP"):format(points)
     end
     return text
 end
 
--- Loyalty and training points, read the way the game's own pet panel and
--- trainer read them, when the tooltip is drawn or the bar's text includes
--- them. Each is nil when the client does not report it, and is left out.
+-- Loyalty, happiness and training points, read the way the game's own pet
+-- panel and trainer read them, when the tooltip is drawn or the bar's text
+-- includes them. Each is nil when the client does not report it, and is left
+-- out.
 
 -- The loyalty rank as the character frame shows it, for example "Faithful".
 local function PetLoyalty()
@@ -347,6 +365,23 @@ local function PetLoyaltyRate()
     return type(rate) == "number" and rate or nil
 end
 
+-- The three moods the classic client gives a pet, by the number
+-- GetPetHappiness reports: 1 unhappy, 2 content, 3 happy.
+local HAPPINESS_TEXT = { "Unhappy", "Content", "Happy" }
+
+-- The pet's mood as the game's own pet panel words it, for example "Happy".
+local function PetHappiness()
+    local info = C_PetInfo
+    if not (info and info.GetPetHappiness) then return nil end
+    local happiness = SafeValue((info.GetPetHappiness()))
+    if type(happiness) ~= "number" then return nil end
+    -- A mood outside the three the client names is left out. The range check
+    -- catches a not-a-number read too, which would be an invalid table index.
+    local mood = math.floor(happiness)
+    if not (mood >= 1 and mood <= 3) then return nil end
+    return HAPPINESS_TEXT[mood]
+end
+
 -- Unspent training points. The trainer never shows fewer than none.
 local function PetTrainingPoints()
     local info = C_PetInfo
@@ -359,8 +394,10 @@ end
 
 local function BarText()
     local loyalty = db.textLoyalty and pet.present and PetLoyalty() or nil
+    local happiness = db.textHappiness and pet.present and PetHappiness() or nil
     local points = db.textTraining and pet.present and PetTrainingPoints() or nil
-    return FormatText(db.textStyle, pet.present, pet.level, pet.current, pet.max, loyalty, points)
+    return FormatText(db.textStyle, pet.present, pet.level, pet.current, pet.max,
+        loyalty, happiness, points)
 end
 
 -- With Show tooltip off, hovering the bar or its grip shows nothing. While the
@@ -401,6 +438,12 @@ local function ShowTooltip(owner)
             elseif rate and rate < 0 then
                 GameTooltip:AddLine("Losing loyalty", unpack(LOSS_COLOR))
             end
+        end
+
+        local happiness = PetHappiness()
+        if happiness then
+            GameTooltip:AddDoubleLine("Happiness", happiness,
+                LABEL_COLOR[1], LABEL_COLOR[2], LABEL_COLOR[3], 1, 1, 1)
         end
 
         local points = PetTrainingPoints()
@@ -498,12 +541,52 @@ end
 -- SetFont returns false when the file cannot be loaded. The chosen font falls
 -- back to the default one, and that to the game's own font object, so the
 -- string always has a font: SetText errors on a font string without one.
-local function ApplyFont(frame)
-    local text = frame.text
+local function PutFont(text)
     if text:SetFont(db.fontPath, db.fontSize, db.outline) == false
         and text:SetFont(DEFAULTS.fontPath, db.fontSize, db.outline) == false then
         text:SetFontObject(GameFontHighlightSmall)
     end
+end
+
+-- A font file another addon ships loads in the background the first time
+-- something asks for it, which for the bar is when the pet first shows up
+-- after login. Until the file is in, SetFont returns false and the text is
+-- drawn in the fallback font; once it is, the game switches the string to it
+-- by itself, but does not always draw the text again, and the bar stayed
+-- blank until its text next changed, when the pet gained experience. So
+-- while the bar's text has not taken the chosen font, it is looked at again
+-- every FONT_CHECK_INTERVAL, and once it has, or after FONT_CHECK_TRIES looks
+-- for a file that never loads, the font goes back on and the text is drawn
+-- afresh.
+local FONT_CHECK_INTERVAL = 0.25 -- seconds
+local FONT_CHECK_TRIES = 40      -- ten seconds in all
+
+local fontCheck -- the ticker waiting for the bar's font, while it waits
+
+local function WatchBarFont()
+    if fontCheck then fontCheck:Cancel() end
+    fontCheck = nil
+    if SamePath((bar.text:GetFont()), db.fontPath) then return end
+    if not (C_Timer and C_Timer.NewTicker) then return end
+
+    local tries = 0
+    fontCheck = C_Timer.NewTicker(FONT_CHECK_INTERVAL, function()
+        tries = tries + 1
+        if tries < FONT_CHECK_TRIES and not SamePath((bar.text:GetFont()), db.fontPath) then return end
+        fontCheck:Cancel()
+        fontCheck = nil
+        PutFont(bar.text)
+        local shown = bar.text:GetText()
+        bar.text:SetText("")
+        bar.text:SetText(shown)
+    end)
+end
+
+-- The bar's font and the preview's. Only the bar waits for its file: the
+-- preview is drawn again whenever the settings page shows.
+local function ApplyFont(frame)
+    PutFont(frame.text)
+    if frame == bar then WatchBarFont() end
 end
 
 -- The bar colour, on the fill and, dimmed, on the track behind it.
@@ -784,10 +867,16 @@ local function SetTextStyle(key)
     NotifyChanged()
 end
 
--- What the bar's text adds after its style: the loyalty rank and the unspent
--- training points.
+-- What the bar's text adds after its style: the loyalty rank, the happiness
+-- and the unspent training points.
 local function SetTextLoyalty(show)
     db.textLoyalty = show and true or false
+    Refresh()
+    NotifyChanged()
+end
+
+local function SetTextHappiness(show)
+    db.textHappiness = show and true or false
     Refresh()
     NotifyChanged()
 end
@@ -956,7 +1045,7 @@ function ShowMenu(owner)
     end
 
     MenuUtil.CreateContextMenu(owner, function(_, root)
-        root:CreateTitle("BeastXP")
+        root:CreateTitle(VERSION and (addonName .. " " .. VERSION) or addonName)
         root:CreateCheckbox("Lock bar",
             function() return db.locked end,
             function() SetLocked(not db.locked) end)
@@ -986,6 +1075,9 @@ function ShowMenu(owner)
         textMenu:CreateCheckbox("Loyalty",
             function() return db.textLoyalty end,
             function() SetTextLoyalty(not db.textLoyalty) end)
+        textMenu:CreateCheckbox("Happiness",
+            function() return db.textHappiness end,
+            function() SetTextHappiness(not db.textHappiness) end)
         textMenu:CreateCheckbox("Training points",
             function() return db.textTraining end,
             function() SetTextTraining(not db.textTraining) end)
@@ -1029,6 +1121,7 @@ local HELP = {
     "/petxp color - pick the bar color, or give purple | blue | green | a hex code like 33aaff",
     "/petxp text full | short | level | percent | none - how much the bar says",
     "/petxp loyalty on | off - add your pet's loyalty to the bar's text",
+    "/petxp happiness on | off - add its happiness, Happy, Content or Unhappy",
     "/petxp training on | off - add its unspent training points (TP)",
     "/petxp font <name> - for example friz, arial or a LibSharedMedia font",
     "/petxp size " .. MIN_FONT_SIZE .. "-" .. MAX_FONT_SIZE .. " - font size",
@@ -1169,6 +1262,14 @@ SlashCmdList["BEASTXP"] = function(msg)
         else
             Print("use /petxp loyalty on or /petxp loyalty off.")
         end
+    elseif command == "happiness" or command == "happy" then
+        if word == "on" or word == "off" then
+            SetTextHappiness(word == "on")
+            Print(db.textHappiness and "the bar's text shows your pet's happiness."
+                or "the bar's text leaves happiness out.")
+        else
+            Print("use /petxp happiness on or /petxp happiness off.")
+        end
     elseif command == "training" or command == "tp" then
         if word == "on" or word == "off" then
             SetTextTraining(word == "on")
@@ -1217,6 +1318,7 @@ end
 -- menu and the slash commands all change a setting through the same setter.
 
 ns.API = {
+    Version = VERSION, -- nil when the toc names none
     GetDB = function() return db end,
     Print = Print,
 
@@ -1226,12 +1328,13 @@ ns.API = {
     FormatText = FormatText,
     -- The preview shows the real pet when one is out and reports its
     -- experience, and the sample pet of the Text menu's examples otherwise:
-    -- level, experience, the most there is, loyalty and training points.
+    -- level, experience, the most there is, loyalty, happiness and training
+    -- points.
     PreviewPet = function()
         if pet.present and pet.max > 0 then
-            return pet.level, pet.current, pet.max, PetLoyalty(), PetTrainingPoints()
+            return pet.level, pet.current, pet.max, PetLoyalty(), PetHappiness(), PetTrainingPoints()
         end
-        return 14, 1290, 2150, "Faithful", 25
+        return 14, 1290, 2150, "Faithful", "Happy", 25
     end,
 
     SetLocked = SetLocked,
@@ -1249,6 +1352,7 @@ ns.API = {
     OpenColorPicker = OpenColorPicker,
     SetTextStyle = SetTextStyle,
     SetTextLoyalty = SetTextLoyalty,
+    SetTextHappiness = SetTextHappiness,
     SetTextTraining = SetTextTraining,
     SetFontPath = SetFontPath,
     SetFontSize = SetFontSize,
@@ -1278,10 +1382,10 @@ ns.API = {
 
 -- What can change the bar. UNIT_PET_EXPERIENCE is the real signal;
 -- PLAYER_XP_UPDATE backs it up, since a pet's experience comes from the same
--- kills. UNIT_HAPPINESS and UNIT_PET_TRAINING_POINTS keep an open tooltip's
--- loyalty and training points current. Each is registered through pcall:
--- registering an event the client does not have raises an error, and one
--- missing event must not stop the rest.
+-- kills. UNIT_HAPPINESS and UNIT_PET_TRAINING_POINTS keep happiness, loyalty
+-- and training points current, on the bar and in an open tooltip. Each is
+-- registered through pcall: registering an event the client does not have
+-- raises an error, and one missing event must not stop the rest.
 local PET_EVENTS = {
     "UNIT_PET",
     "UNIT_PET_EXPERIENCE",

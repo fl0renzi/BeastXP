@@ -5,8 +5,8 @@ A single bar for your hunter pet's experience, for World of Warcraft: Forever. N
 The bar has no border: just a thin dark backing behind the fill, in the purple the game draws
 experience in. It shows the pet's level, its experience into the level and the percentage, for
 example `Level 14   340 / 2150  (15%)`. Hover it for the pet's name, the experience it still
-needs, its loyalty rank (and whether it is gaining or losing loyalty) and its unspent training
-points, unless you turn the tooltip off.
+needs, its loyalty rank (and whether it is gaining or losing loyalty), its happiness and its unspent
+training points, unless you turn the tooltip off.
 
 ## Settings page
 
@@ -21,8 +21,8 @@ QuestForever lay out theirs:
   *Texture*, and *Color* (click the swatch for the color picker, or pick a preset). X and Y measure
   the bar's center from the center of the screen: X to the right, Y up, and below 0 the other way.
   The bar is kept whole on the screen.
-- **Text**: the text style, *Loyalty* and *Training points*, *Font*, a *Font size* slider and
-  *Outline*.
+- **Text**: the text style, *Loyalty*, *Happiness* and *Training points*, *Font*, a *Font size*
+  slider and *Outline*.
 - **Defaults** (top right) puts every setting back to how a fresh install has it, but leaves the bar
   where it is. It asks for a second click first.
 
@@ -45,9 +45,11 @@ The bar starts **unlocked** on a fresh install, so you can put it where you want
   color as you drag, and Cancel puts the old one back.
 - **Text**: right-click the bar and pick how much it says under *Text*. Each entry shows an example:
   `Level 14   1290 / 2150  (60%)`, `14  1290/2150  60%`, `14  60%`, `60%`, or no text at all. The
-  short style writes large numbers as `12.3k`. Tick *Loyalty* or *Training points* in the same menu
-  to add the pet's loyalty rank or its unspent training points after the text, for example
-  `15%  Faithful  25 TP`. Both are off for a fresh install, and *No text* leaves them out too.
+  short style writes large numbers as `12.3k`. Tick *Loyalty*, *Happiness* or *Training points* in
+  the same menu to add the pet's loyalty rank, its happiness (`Happy`, `Content` or `Unhappy`, as
+  the game's pet panel words it) or its unspent training points after the text, for example
+  `15%  Faithful  Happy  25 TP`. All three are off for a fresh install, and *No text* leaves them
+  out too.
 - **Font**: right-click the bar for the font, the font size and the outline. The four fonts the game
   ships are always listed, along with every LibSharedMedia font.
 - **Lock**: right-click the bar and tick *Lock bar*. A locked bar cannot be moved or resized, hides
@@ -80,6 +82,7 @@ found by its name or any part of it:
 /petxp color <color>      purple | blue | green | reset | a hex code like 33aaff
 /petxp text <style>       full | short | level | percent | none
 /petxp loyalty on | off   the loyalty rank after the text
+/petxp happiness on | off happy, content or unhappy after the text (happy works too)
 /petxp training on | off  unspent training points after the text (tp works too)
 /petxp font <name>        for example: friz, arial, morpheus
 /petxp size 6-32
@@ -116,10 +119,18 @@ Install it from CurseForge, or copy `BeastXP.toc`, `BeastXP.lua` and `BeastXP_Op
 - Event-driven: the bar refreshes on `UNIT_PET`, `UNIT_PET_EXPERIENCE`, `UNIT_LEVEL`,
   `PET_UI_UPDATE`, `PLAYER_XP_UPDATE` and `PLAYER_ENTERING_WORLD`, never from `OnUpdate`. The one
   exception is a drag in Edit Mode, where the X and Y follow the bar until it is let go.
-  `UNIT_HAPPINESS` and `UNIT_PET_TRAINING_POINTS` keep loyalty and training points current, on the
-  bar and in an open tooltip.
-- Loyalty and training points come from `C_PetInfo`, read the way the game's own pet panel and
-  trainer read them. Whatever the client does not report is left out, on the bar and in the tooltip.
+  `UNIT_HAPPINESS` and `UNIT_PET_TRAINING_POINTS` keep loyalty, happiness and training points
+  current, on the bar and in an open tooltip.
+- A font file another addon ships loads in the background the first time the bar asks for it,
+  usually when the pet first shows up after login. Until it is in, the bar's text uses Friz
+  Quadrata; the game then switches to the file by itself but does not always draw the text again.
+  So while the bar's text has not taken the chosen font, BeastXP looks again every quarter second,
+  for up to ten seconds, and draws the text afresh once it has. That short check is the only timer.
+- The right-click menu's title and the settings page show the version from the toc, which the
+  packager writes from the release tag.
+- Loyalty, happiness and training points come from `C_PetInfo`, read the way the game's own pet
+  panel and trainer read them. Whatever the client does not report is left out, on the bar and in
+  the tooltip.
 
 ## Tests
 
