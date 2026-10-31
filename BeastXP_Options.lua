@@ -245,6 +245,11 @@ local function RefreshPage()
     controls.alertSound:SetChecked(db.alertSound)
     controls.alertFlash:SetChecked(db.alertFlash)
     controls.alertChat:SetChecked(db.alertChat)
+    controls.feedSound:SetChecked(db.feedSound)
+    controls.feedFlash:SetChecked(db.feedFlash)
+    controls.feedChat:SetChecked(db.feedChat)
+    controls.fade:SetChecked(db.fadeOutOfCombat)
+    controls.fadeOpacity:SetValue(db.fadeOpacity)
     controls.width:SetValue(db.width)
     controls.height:SetValue(db.height)
     SetBoxValue(controls.widthBox, db.width)
@@ -456,11 +461,11 @@ local function BuildAlertSection()
         end
     end)
 
-    controls.alertSound = Checkbox(Row("Level-up sound"), function(on) API.SetAlert("sound", on) end)
+    controls.alertSound = Checkbox(Row("Level-up sound"), function(on) API.SetAlert("level", "sound", on) end)
     Tooltip(controls.alertSound, "Plays the game's level up sound when your pet gains a level.")
-    controls.alertFlash = Checkbox(Row("Level-up flash"), function(on) API.SetAlert("flash", on) end)
+    controls.alertFlash = Checkbox(Row("Level-up flash"), function(on) API.SetAlert("level", "flash", on) end)
     Tooltip(controls.alertFlash, "Flashes the bar when your pet gains a level.")
-    controls.alertChat = Checkbox(Row("Level-up message"), function(on) API.SetAlert("chat", on) end)
+    controls.alertChat = Checkbox(Row("Level-up message"), function(on) API.SetAlert("level", "chat", on) end)
     Tooltip(controls.alertChat, "Says in chat when your pet gains a level, and how many training points it has to spend.")
 
     local test = Button(Row("Alert"), "Test alert", 160, function()
@@ -468,6 +473,28 @@ local function BuildAlertSection()
         if API.GetDB().alertFlash then API.FlashFrame(controls.preview) end
     end)
     Tooltip(test, "Plays the level-up alert the way it is set up, on the bar and on the preview.")
+
+    controls.feedSound = Checkbox(Row("Feed sound"), function(on) API.SetAlert("feed", "sound", on) end)
+    Tooltip(controls.feedSound, "Plays a short sound when your pet's happiness drops, from Happy to Content or from Content to Unhappy.")
+    controls.feedFlash = Checkbox(Row("Feed flash"), function(on) API.SetAlert("feed", "flash", on) end)
+    Tooltip(controls.feedFlash, "Flashes the bar in the new mood's color when your pet's happiness drops.")
+    controls.feedChat = Checkbox(Row("Feed message"), function(on) API.SetAlert("feed", "chat", on) end)
+    Tooltip(controls.feedChat, "Says in chat when your pet's happiness drops, and that it is time to feed it.")
+
+    local testFeed = Button(Row("Reminder"), "Test reminder", 160, function()
+        API.TestFeedAlert()
+        if API.GetDB().feedFlash then API.FlashFrame(controls.preview, API.FeedTestColor()) end
+    end)
+    Tooltip(testFeed, "Plays the feed reminder the way it is set up, on the bar and on the preview.")
+end
+
+local function BuildFadeSection()
+    Section("Fade")
+
+    controls.fade = Checkbox(Row("Fade out of combat"), API.SetFadeOutOfCombat)
+    Tooltip(controls.fade, "Fades the bar while you are out of combat. It comes back to full in combat, under the mouse, while an alert flashes and in Edit Mode.")
+
+    controls.fadeOpacity = Slider(Row("Faded opacity"), API.MIN_FADE, API.MAX_FADE, API.SetFadeOpacity)
 end
 
 local function BuildPage()
@@ -503,6 +530,7 @@ local function BuildPage()
     BuildTextSection()
     BuildTooltipSection()
     BuildAlertSection()
+    BuildFadeSection()
     content:SetSize(scroll:GetWidth(), -nextY)
 
     page:SetScript("OnShow", function()

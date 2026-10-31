@@ -1640,6 +1640,177 @@ test("the settings page and the menu set up the alert", function()
 end)
 
 --------------------------------------------------------------------------------
+-- Feed reminder
+--------------------------------------------------------------------------------
+
+test("a drop in happiness plays the feed reminder, in the new mood's colour", function()
+    __boot({ pet = hunterPet() })
+    __pet.happiness = 2
+    __fire("UNIT_HAPPINESS", "pet")
+    assert_eq(__sounds[1], 3081, "no feed sound")
+    assert_true(BeastXPBar.flasher:IsShown(), "no flash")
+    assert_color(BeastXPBar.flash, 0.9, 0.75, 0.0, "flash not in the content colour")
+    assert_true(__printed("Grimtooth is now Content. Feed it to keep it Happy."), "no chat line")
+
+    __advance(3)
+    __pet.happiness = 1
+    __fire("UNIT_HAPPINESS", "pet")
+    assert_eq(#__sounds, 2, "no reminder for unhappy")
+    assert_color(BeastXPBar.flash, 0.8, 0.1, 0.1, "flash not in the unhappy colour")
+    assert_true(__printed("Grimtooth is now Unhappy. Feed it soon, or it will lose loyalty."), "no unhappy line")
+
+    -- Feeding it back up says nothing.
+    __advance(3)
+    __pet.happiness = 3
+    __fire("UNIT_HAPPINESS", "pet")
+    assert_eq(#__sounds, 2, "a reminder for a happier pet")
+
+    -- The level up flash is white again after a coloured one.
+    __pet.level = 15
+    __fire("UNIT_LEVEL", "pet")
+    assert_color(BeastXPBar.flash, 1, 1, 1, "level up flash kept the mood colour")
+end)
+
+test("a summon, a swap, a login, a revival or an unknown mood never raise a feed reminder", function()
+    __boot({ pet = hunterPet({ happiness = 1 }) })
+    __pet = nil
+    __fire("UNIT_PET", "player")
+    __pet = hunterPet({ name = "Claw", happiness = 3 })
+    __fire("UNIT_PET", "player")
+    __pet = hunterPet({ name = "Fang", happiness = 1 })
+    __fire("UNIT_PET", "player")
+
+    -- A mood the client does not report keeps the last one, so the next
+    -- known one is compared with that.
+    __pet.happiness = __secret()
+    __fire("UNIT_HAPPINESS", "pet")
+    __pet.happiness = 1
+    __fire("UNIT_HAPPINESS", "pet")
+
+    -- Dying and coming back unhappy.
+    __pet.happiness = 3
+    __fire("UNIT_HAPPINESS", "pet")
+    __pet.dead = true
+    __fire("UNIT_HEALTH", "pet")
+    __pet.dead, __pet.happiness = false, 1
+    __fire("UNIT_HEALTH", "pet")
+
+    assert_eq(#__sounds, 0, "a reminder without a drop")
+    assert_false(__printed("is now"), "a chat line without a drop")
+end)
+
+test("each part of the feed reminder turns off, and tests come from the menu, the page and the command", function()
+    __boot({ pet = hunterPet() })
+    SlashCmdList.BEASTXP("feedalert sound off")
+    assert_true(__printed("feed reminder sound off"), "no confirmation")
+    SlashCmdList.BEASTXP("feed chat off")
+    __pet.happiness = 2
+    __fire("UNIT_HAPPINESS", "pet")
+    assert_eq(#__sounds, 0, "sound played while off")
+    assert_true(BeastXPBar.flasher:IsShown(), "flash off too")
+    assert_false(__printed("is now"), "chat line while off")
+    SlashCmdList.BEASTXP("feedalert loud on")
+    assert_true(__printed("use /petxp feedalert sound"), "no usage for a bad part")
+
+    __boot({ pet = hunterPet({ happiness = 1 }) })
+    SlashCmdList.BEASTXP("feedalert test")
+    assert_true(__printed("Grimtooth is now Unhappy."), "the test did not use the pet's mood")
+    __script(BeastXPBar, "OnMouseUp", "RightButton")
+    local item = __menu_item("Feed reminder", "Flash")
+    assert_true(item, "no Feed reminder menu")
+    __menu_click(item)
+    assert_false(BeastXPDB.feedFlash, "the menu did not turn the flash off")
+    __menu_click(__menu_item("Feed reminder", "Test reminder"))
+    assert_eq(#__sounds, 2, "the menu's test did not play")
+
+    __boot({})
+    open_page()
+    assert_true(__control("Feed sound", "UICheckButtonTemplate"):GetChecked(), "feed sound off for a fresh install")
+    __script(__page_button("Test reminder"), "OnClick")
+    assert_true(__printed("Your pet is now Content."), "no sample reminder")
+    local preview = __control("Preview", nil, "Frame")
+    assert_true(preview.flasher:IsShown(), "the preview did not flash")
+    assert_color(preview.flash, 0.9, 0.75, 0.0, "the preview flash not in the content colour")
+end)
+
+--------------------------------------------------------------------------------
+-- Fade
+--------------------------------------------------------------------------------
+
+test("the bar fades out of combat, and comes back in combat, under the mouse, for a flash and in Edit Mode", function()
+    __boot({ pet = hunterPet() })
+    assert_eq(BeastXPBar:GetAlpha(), 1, "faded for a fresh install")
+    assert_false(__registered("PLAYER_REGEN_DISABLED"), "watching combat with fading off")
+
+    SlashCmdList.BEASTXP("fade on")
+    assert_true(__printed("the bar fades to 40% out of combat"), "no confirmation")
+    assert_eq(BeastXPBar:GetAlpha(), 0.4)
+
+    __inCombat = true
+    __fire("PLAYER_REGEN_DISABLED")
+    assert_eq(BeastXPBar:GetAlpha(), 1, "faded in combat")
+    __inCombat = false
+    __fire("PLAYER_REGEN_ENABLED")
+    assert_eq(BeastXPBar:GetAlpha(), 0.4, "not faded after combat")
+
+    __script(BeastXPBar, "OnEnter")
+    assert_eq(BeastXPBar:GetAlpha(), 1, "faded under the mouse")
+    __script(BeastXPBar, "OnLeave")
+    __script(BeastXPBar.grip, "OnEnter")
+    assert_eq(BeastXPBar:GetAlpha(), 1, "faded under the mouse on the grip")
+    __script(BeastXPBar.grip, "OnLeave")
+    assert_eq(BeastXPBar:GetAlpha(), 0.4)
+
+    __pet.level = 15
+    __fire("UNIT_LEVEL", "pet")
+    assert_eq(BeastXPBar:GetAlpha(), 1, "the flash played faded")
+    __script(BeastXPBar.flasher, "OnUpdate", 1.5)
+    assert_eq(BeastXPBar:GetAlpha(), 0.4, "not faded again after the flash")
+
+    __editMode(true)
+    assert_eq(BeastXPBar:GetAlpha(), 1, "faded in Edit Mode")
+    __editMode(false)
+    assert_eq(BeastXPBar:GetAlpha(), 0.4)
+
+    SlashCmdList.BEASTXP("fade 15")
+    assert_eq(BeastXPBar:GetAlpha(), 0.15)
+    SlashCmdList.BEASTXP("fade 250")
+    assert_eq(BeastXPDB.fadeOpacity, 100, "opacity not capped")
+    SlashCmdList.BEASTXP("fade dim")
+    assert_true(__printed("use /petxp fade on or off"), "no usage for a bad word")
+
+    SlashCmdList.BEASTXP("fade off")
+    assert_eq(BeastXPBar:GetAlpha(), 1)
+    assert_false(__registered("PLAYER_REGEN_DISABLED"), "still watching combat with fading off")
+end)
+
+test("a login in combat starts unfaded, and the settings page sets the fade", function()
+    __boot({ pet = hunterPet(), db = { fadeOutOfCombat = true, fadeOpacity = "dim" }, login = false })
+    __inCombat = true
+    __fire("PLAYER_LOGIN")
+    assert_eq(BeastXPDB.fadeOpacity, 40, "a broken opacity kept")
+    assert_eq(BeastXPBar:GetAlpha(), 1, "faded in combat at login")
+    __inCombat = false
+    __fire("PLAYER_REGEN_ENABLED")
+    assert_eq(BeastXPBar:GetAlpha(), 0.4, "not faded once combat ended")
+
+    __boot({ pet = hunterPet() })
+    open_page()
+    local fade = __control("Fade out of combat", "UICheckButtonTemplate")
+    fade:SetChecked(true)
+    __script(fade, "OnClick")
+    assert_true(BeastXPDB.fadeOutOfCombat, "the box did not turn fading on")
+    __control("Faded opacity", "MinimalSliderWithSteppersTemplate"):SetValue(25)
+    assert_eq(BeastXPDB.fadeOpacity, 25)
+    assert_eq(BeastXPBar:GetAlpha(), 0.25)
+
+    __script(__page_button("Defaults"), "OnClick")
+    __script(__page_button("Click again"), "OnClick")
+    assert_eq(BeastXPBar:GetAlpha(), 1, "Defaults left the bar faded")
+    assert_false(__registered("PLAYER_REGEN_DISABLED"), "Defaults left combat watched")
+end)
+
+--------------------------------------------------------------------------------
 -- Experience rate
 --------------------------------------------------------------------------------
 

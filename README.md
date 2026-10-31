@@ -8,7 +8,8 @@ example `Level 14   340 / 2150  (15%)`. Hover it for the pet's name, the experie
 needs, its experience per hour and the time to its next level, its loyalty rank (and whether it is
 gaining or losing loyalty), its happiness and its unspent training points, unless you turn the
 tooltip off. When the pet gains a level, the bar flashes, the game's level up sound plays and a line
-in chat says how many training points it has to spend.
+in chat says how many training points it has to spend. When its happiness drops, a feed reminder
+does the same in the new mood's color.
 
 ## Settings page
 
@@ -28,7 +29,9 @@ QuestForever lay out theirs:
 - **Tooltip and session**: *Experience rate* and *Reset session*.
 - **Alerts and colors**: *Color by happiness*, *Preview mood* (shows the preview in each mood's
   color; the bar is not touched), *Level-up sound*, *Level-up flash*, *Level-up message*, and
-  *Test alert*, which plays the alert on the bar and on the preview.
+  *Test alert*, which plays the alert on the bar and on the preview; then *Feed sound*, *Feed
+  flash*, *Feed message* and *Test reminder* for the feed reminder.
+- **Fade**: *Fade out of combat* and a *Faded opacity* slider.
 - **Defaults** (top right) puts every setting back to how a fresh install has it, but leaves the bar
   where it is. It asks for a second click first.
 
@@ -78,6 +81,16 @@ The bar starts **unlocked** on a fresh install, so you can put it where you want
   have 5 training points to spend.` The second sentence is left out when there are none. Summoning,
   swapping or logging in never raises one. Turn each part off under *Level-up alert* in the
   right-click menu, which also has *Test alert*. All three are on for a fresh install.
+- **Feed reminder**: when the pet's happiness drops, from Happy to Content or from Content to
+  Unhappy, a short sound plays, the bar flashes in the new mood's color and a line in chat says, for
+  example, `Grimtooth is now Content. Feed it to keep it Happy.` A summon, a swap, a login or a
+  revival only notes the mood, and feeding it back up says nothing. Turn each part off under *Feed
+  reminder* in the right-click menu, which also has *Test reminder*. All three are on for a fresh
+  install.
+- **Fade**: tick *Fade out of combat* in the right-click menu and the bar fades to the faded opacity
+  (40% for a fresh install, set on the settings page or with `/petxp fade <percent>`) while you are
+  out of combat. It comes back to full in combat, under the mouse, while an alert flashes and in
+  Edit Mode. It is off for a fresh install.
 - **Edit Mode**: open the game's own *Edit Mode* (Esc menu) and the bar joins in: it shows even
   without a pet, lit up in Edit Mode's blue with its name and its X and Y above it, and can be
   dragged and resized even while locked. The X and Y follow the bar as you drag. Hover the bar and
@@ -106,6 +119,10 @@ found by its name or any part of it:
 /petxp happycolor on | off  green, yellow or red by the pet's happiness
 /petxp levelalert sound | flash | chat on | off   (alert works too)
 /petxp levelalert test
+/petxp feedalert sound | flash | chat on | off   (feed works too)
+/petxp feedalert test
+/petxp fade on | off      fade the bar while out of combat
+/petxp fade 0-100         the faded opacity, in percent
 /petxp text <style>       full | short | level | percent | none
 /petxp loyalty on | off   the loyalty rank after the text
 /petxp happiness on | off happy, content or unhappy after the text (happy works too)
@@ -152,6 +169,8 @@ Install it from CurseForge, or copy `BeastXP.toc`, `BeastXP.lua` and `BeastXP_Op
   the experience. The level up chat line waits half a second for the training points.
 - `UNIT_HEALTH` for the pet is read only to notice it dying or coming back; any other health change
   is ignored without a refresh. A dead pet the client no longer counts as out shows as `No pet`.
+- `PLAYER_REGEN_DISABLED` and `PLAYER_REGEN_ENABLED` are registered only while *Fade out of combat*
+  is on, and only fade the bar.
   `UNIT_HAPPINESS` and `UNIT_PET_TRAINING_POINTS` keep loyalty, happiness and training points
   current, on the bar and in an open tooltip.
 - A font file another addon ships loads in the background the first time the bar asks for it,

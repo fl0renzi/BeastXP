@@ -99,8 +99,14 @@ local FLASH_IN, FLASH_TIME, FLASH_PEAK = 0.25, 1.0, 0.6
 local ALERT_DELAY = 0.5
 local ALERT_COOLDOWN = 2
 
--- The sound the game plays for the player's own level up.
+-- The sound the game plays for the player's own level up, and the softer one
+-- it plays for a whisper, for the feed reminder.
 local LEVEL_UP_SOUND = 888
+local FEED_SOUND = 3081
+
+-- With Fade out of combat on, the bar sits at the faded opacity, as a
+-- percentage, while you are out of combat and the mouse is not over it.
+local MIN_FADE, MAX_FADE = 0, 100
 
 -- The tooltip's experience rate waits for RATE_MIN_TIME seconds of the pet
 -- being out, and at least one gain, before it guesses.
@@ -195,6 +201,13 @@ local DEFAULTS = {
     alertSound   = true,
     alertFlash   = true,
     alertChat    = true,
+    -- What the pet's mood dropping does: Happy to Content, Content to Unhappy.
+    feedSound    = true,
+    feedFlash    = true,
+    feedChat     = true,
+    -- Fading the bar while out of combat, and how far, in percent.
+    fadeOutOfCombat = false,
+    fadeOpacity  = 40,
 }
 
 --------------------------------------------------------------------------------
@@ -216,7 +229,7 @@ local pet = { present = false, current = 0, max = 0, level = nil, dead = false }
 -- same pet gaining experience or a level from another pet being summoned. All
 -- nil while no pet is out, so the first reading after a summon, a swap or a
 -- login only sets the baseline.
-local seen = { id = nil, level = nil, current = nil, max = nil }
+local seen = { id = nil, level = nil, current = nil, max = nil, mood = nil }
 
 -- This login's experience for the tooltip's rate: which pet it is for, the
 -- experience gained, and how long that pet has been out. Kept in memory only.
@@ -274,6 +287,8 @@ local function InitDB()
     end
 
     db.fontSize = Clamp(Round(db.fontSize), MIN_FONT_SIZE, MAX_FONT_SIZE)
+    if db.fadeOpacity ~= db.fadeOpacity then db.fadeOpacity = DEFAULTS.fadeOpacity end
+    db.fadeOpacity = Clamp(Round(db.fadeOpacity), MIN_FADE, MAX_FADE)
 
     local outlineKnown = false
     for _, outline in ipairs(OUTLINES) do
@@ -487,7 +502,8 @@ end
 -- Compares the reading ReadPet just took with the last one. Counts the
 -- experience the same pet gained, across a level boundary too, and returns
 -- true when that pet went up a level. A drop, a lower level or a different
--- pet counts nothing.
+-- pet counts nothing. Returns second the mood the same pet just dropped to,
+-- when it did. A mood the client does not report keeps the last one.
 local function FollowPet()
     -- A dead pet is away: the clock stops, and its revival sets a baseline.
     local id = pet.present and not pet.dead and pet.level and PetIdentity() or nil
@@ -496,9 +512,13 @@ local function FollowPet()
             session.elapsed = session.elapsed + (Now() - session.since)
             session.since = nil
         end
-        seen.id, seen.level, seen.current, seen.max = nil, nil, nil, nil
-        return false
+        seen.id, seen.level, seen.current, seen.max, seen.mood = nil, nil, nil, nil, nil
+        return false, nil
     end
+
+    local mood, hungrier = PetMood(), nil
+    if seen.id == id and mood and seen.mood and mood < seen.mood then hungrier = mood end
+    if mood or seen.id ~= id then seen.mood = mood end
 
     if id ~= session.id or (seen.id == id and pet.level < seen.level) then
         StartSession(id)
@@ -525,12 +545,12 @@ local function FollowPet()
                 session.gained = session.gained + pet.current
             end
         elseif pet.level == seen.level then
-            if pet.current < seen.current then return false end
+            if pet.current < seen.current then return false, hungrier end
             session.gained = session.gained + (pet.current - seen.current)
         end
     end
     seen.id, seen.level, seen.current, seen.max = id, pet.level, current, pet.max
-    return leveled
+    return leveled, hungrier
 end
 
 -- Experience per hour and seconds to the next level, from this session. nil
@@ -722,8 +742,9 @@ local function BuildBarVisuals(frame)
     text:SetWordWrap(false)
     frame.text = text
 
-    -- The level up flash: a white wash over the fill, under the text, faded
-    -- in and out by a frame that is only shown, and only runs, while it plays.
+    -- The alert flash: a wash over the fill, under the text, white for a
+    -- level up and the mood's colour for the feed reminder, faded in and out
+    -- by a frame that is only shown, and only runs, while it plays.
     local flash = status:CreateTexture(nil, "ARTWORK", nil, 7)
     flash:SetAllPoints(status)
     flash:SetTexture(FLASH_TEXTURE)
@@ -745,14 +766,25 @@ local function BuildBarVisuals(frame)
             flash:SetAlpha(FLASH_PEAK * (1 - (t - FLASH_IN) / (FLASH_TIME - FLASH_IN)))
         end
     end)
+    -- The bar fades back once the flash is over (see ApplyFade).
+    flasher:SetScript("OnHide", function()
+        if frame.OnFlashDone then frame.OnFlashDone() end
+    end)
     frame.flasher = flasher
 end
 
--- Plays the flash on the bar or the settings preview, from the start.
-local function FlashFrame(frame)
+-- Plays the flash on the bar or the settings preview, from the start, in
+-- white or the colour given.
+local function FlashFrame(frame, color)
+    if color then
+        frame.flash:SetVertexColor(color[1], color[2], color[3])
+    else
+        frame.flash:SetVertexColor(1, 1, 1)
+    end
     frame.flasher.time = 0
     frame.flash:SetAlpha(0)
     frame.flasher:Show()
+    if frame.OnFlashDone then frame.OnFlashDone() end
 end
 
 -- SetFont returns false when the file cannot be loaded. The chosen font falls
@@ -870,6 +902,26 @@ local function StartMoving(resize)
     if editing then bar.highlight:SetScript("OnUpdate", UpdateReadout) end
 end
 
+-- With Fade out of combat on, the bar sits at the faded opacity, and comes up
+-- to full in combat, under the mouse (so while it is dragged too), while a
+-- flash plays and while Edit Mode is open, so it is never faded where it
+-- matters.
+local inCombat = false
+local hovered = false
+local WatchCombat -- defined with the events, below
+
+local function ApplyFade()
+    if not bar then return end
+    local full = not db.fadeOutOfCombat or inCombat or hovered or editing
+        or bar.flasher:IsShown()
+    bar:SetAlpha(full and 1 or db.fadeOpacity / 100)
+end
+
+local function SetHovered(over)
+    hovered = over
+    ApplyFade()
+end
+
 local function EnsureBar()
     if bar then return bar end
 
@@ -897,12 +949,16 @@ local function EnsureBar()
     end)
     grip:SetScript("OnMouseUp", StopMoving)
     grip:SetScript("OnEnter", function(self)
+        SetHovered(true)
         if not db.showTooltip then return end
         GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
         GameTooltip:AddLine("Drag to resize", 1, 1, 1)
         GameTooltip:Show()
     end)
-    grip:SetScript("OnLeave", function() GameTooltip:Hide() end)
+    grip:SetScript("OnLeave", function()
+        SetHovered(false)
+        GameTooltip:Hide()
+    end)
     bar.grip = grip
 
     -- While the game's Edit Mode is open the bar is laid over in its light
@@ -951,25 +1007,46 @@ local function EnsureBar()
     bar:SetScript("OnMouseUp", function(self, button)
         if button == "RightButton" then ShowMenu(self) end
     end)
-    bar:SetScript("OnEnter", ShowTooltip)
-    bar:SetScript("OnLeave", function() GameTooltip:Hide() end)
+    bar:SetScript("OnEnter", function(self)
+        SetHovered(true)
+        ShowTooltip(self)
+    end)
+    bar:SetScript("OnLeave", function()
+        SetHovered(false)
+        GameTooltip:Hide()
+    end)
+    bar.OnFlashDone = ApplyFade
 
     ApplyLayout()
     ApplyTexture(bar)
     ApplyFont(bar)
     ApplyLock()
+    ApplyFade()
     return bar
 end
 
--- The level up alert, in the three parts the settings turn on: the game's
--- level up sound, the flash on the bar, and a line in chat. The chat line
--- waits a moment for the training points, which the game may update just
--- after the level. A test, from the settings page or /petxp levelalert test,
--- plays every part that is on, whatever the cooldown, and names the next
--- level of the pet that is out, or a sample one.
-local lastAlert -- when the last alert played
+-- The two alerts, each in the three parts its settings turn on: a sound, the
+-- flash on the bar, and a line in chat. The level up alert plays the game's
+-- level up sound and a white flash, and its chat line waits a moment for the
+-- training points, which the game may update just after the level. The feed
+-- reminder plays when the pet's mood drops, Happy to Content or Content to
+-- Unhappy, with a softer sound and a flash in the new mood's colour. Each
+-- alert has its own cooldown. A test, from the menu, the settings page or
+-- the slash command, plays every part that is on, whatever the cooldown,
+-- for the pet that is out, or a sample one.
+local ALERTS = {
+    level = { sound = "alertSound", flash = "alertFlash", chat = "alertChat" },
+    feed  = { sound = "feedSound",  flash = "feedFlash",  chat = "feedChat" },
+}
+local lastAlert = {} -- when each alert last played
 
-local function AlertText(name, level, points)
+local function PetNameOr(fallback)
+    local name = pet.present and SafeValue(UnitName("pet")) or nil
+    if type(name) ~= "string" or name == "" then return fallback end
+    return name
+end
+
+local function LevelUpText(name, level, points)
     local text = ("%s reached level %d."):format(name, level)
     if points and points > 0 then
         text = text .. (" You have %d training point%s to spend."):format(points, points == 1 and "" or "s")
@@ -977,26 +1054,56 @@ local function AlertText(name, level, points)
     return text
 end
 
-local function LevelUpAlert(test)
-    local now = Now()
-    if not test and lastAlert and now - lastAlert < ALERT_COOLDOWN then return end
-    lastAlert = now
-
-    if db.alertSound and type(PlaySound) == "function" then
-        PlaySound(SOUNDKIT and SOUNDKIT.LEVEL_UP or LEVEL_UP_SOUND)
+local function FeedText(name, mood)
+    if mood == 1 then
+        return ("%s is now Unhappy. Feed it soon, or it will lose loyalty."):format(name)
     end
-    if db.alertFlash and bar and bar:IsShown() then FlashFrame(bar) end
+    return ("%s is now Content. Feed it to keep it Happy."):format(name)
+end
+
+-- Plays the sound and the flash an alert has turned on, unless it played
+-- within the cooldown. False when it did not play, so the caller says nothing
+-- either.
+local function PlayAlert(kind, test, sound, color)
+    local now = Now()
+    if not test and lastAlert[kind] and now - lastAlert[kind] < ALERT_COOLDOWN then return false end
+    lastAlert[kind] = now
+
+    local keys = ALERTS[kind]
+    if db[keys.sound] and type(PlaySound) == "function" then PlaySound(sound) end
+    if db[keys.flash] and bar and bar:IsShown() then FlashFrame(bar, color) end
+    return true
+end
+
+local function LevelUpAlert(test)
+    if not PlayAlert("level", test, SOUNDKIT and SOUNDKIT.LEVEL_UP or LEVEL_UP_SOUND) then return end
     if not db.alertChat then return end
 
-    local name = pet.present and SafeValue(UnitName("pet")) or nil
-    if type(name) ~= "string" or name == "" then name = "Your pet" end
+    local name = PetNameOr("Your pet")
     local level = pet.level or 14
     if test then level = level + 1 end
     local function Say()
         local points = pet.present and PetTrainingPoints() or (test and 5) or nil
-        Print(AlertText(name, level, points))
+        Print(LevelUpText(name, level, points))
     end
     if C_Timer and C_Timer.After then C_Timer.After(ALERT_DELAY, Say) else Say() end
+end
+
+-- The mood a test reminder names: the pet's own, or Content while it is happy
+-- or unknown, since that is the first reminder a pet gets.
+local function TestMood()
+    local mood = pet.present and PetMood() or nil
+    if not mood or mood == 3 then mood = 2 end
+    return mood
+end
+
+-- mood is the one the pet dropped to; a test names TestMood's.
+local function FeedAlert(mood, test)
+    if test then mood = TestMood() end
+    if not PlayAlert("feed", test, SOUNDKIT and SOUNDKIT.TELL_MESSAGE or FEED_SOUND, HAPPINESS_COLORS[mood]) then
+        return
+    end
+    if db.feedChat then Print(FeedText(PetNameOr("Your pet"), mood)) end
 end
 
 -- The one place the bar is updated. It shows while a hunter pet is out, and
@@ -1004,7 +1111,7 @@ end
 local function Refresh()
     if not active then return end
     ReadPet()
-    local leveled = FollowPet()
+    local leveled, hungrier = FollowPet()
 
     if not pet.present and not CanMove() then
         if bar then bar:Hide() end
@@ -1024,6 +1131,8 @@ local function Refresh()
     frame.text:SetText(BarText())
     frame:Show()
     if leveled then LevelUpAlert(false) end
+    if hungrier then FeedAlert(hungrier, false) end
+    ApplyFade()
 
     if GameTooltip:IsShown() and GameTooltip:GetOwner() == frame then
         ShowTooltip(frame)
@@ -1162,11 +1271,23 @@ local function SetHappyColor(on)
     NotifyChanged()
 end
 
--- What a level up does, by part: "sound", "flash" or "chat".
-local ALERT_KEYS = { sound = "alertSound", flash = "alertFlash", chat = "alertChat" }
+-- What an alert does, by kind, "level" or "feed", and part, "sound", "flash"
+-- or "chat".
+local function SetAlert(kind, part, on)
+    db[ALERTS[kind][part]] = on and true or false
+    NotifyChanged()
+end
 
-local function SetAlert(part, on)
-    db[ALERT_KEYS[part]] = on and true or false
+local function SetFadeOutOfCombat(on)
+    db.fadeOutOfCombat = on and true or false
+    WatchCombat()
+    ApplyFade()
+    NotifyChanged()
+end
+
+local function SetFadeOpacity(percent)
+    db.fadeOpacity = Clamp(Round(percent), MIN_FADE, MAX_FADE)
+    ApplyFade()
     NotifyChanged()
 end
 
@@ -1249,6 +1370,7 @@ end
 local function ResetDefaults()
     for key, value in pairs(DEFAULTS) do db[key] = value end
     db.barColor = { XP_COLOR[1], XP_COLOR[2], XP_COLOR[3] }
+    WatchCombat()
     if bar then
         ApplyLayout()
         ApplyTexture(bar)
@@ -1326,6 +1448,25 @@ local function OpenSettings()
     end
 end
 
+-- A submenu with an alert's three parts and its test.
+local ALERT_PARTS = {
+    { key = "sound", name = "Sound" },
+    { key = "flash", name = "Flash" },
+    { key = "chat",  name = "Chat message" },
+}
+
+local function AddAlertMenu(root, title, kind, testName, test)
+    local submenu = root:CreateButton(title)
+    for _, part in ipairs(ALERT_PARTS) do
+        local key = ALERTS[kind][part.key]
+        submenu:CreateCheckbox(part.name,
+            function() return db[key] end,
+            function() SetAlert(kind, part.key, not db[key]) end)
+    end
+    submenu:CreateDivider()
+    submenu:CreateButton(testName, test)
+end
+
 -- The client's own context menu, so it looks like every other menu in the
 -- game.
 function ShowMenu(owner)
@@ -1346,18 +1487,12 @@ function ShowMenu(owner)
             function() return db.tooltipRate end,
             function() SetTooltipRate(not db.tooltipRate) end)
 
-        local alertMenu = root:CreateButton("Level-up alert")
-        alertMenu:CreateCheckbox("Sound",
-            function() return db.alertSound end,
-            function() SetAlert("sound", not db.alertSound) end)
-        alertMenu:CreateCheckbox("Flash",
-            function() return db.alertFlash end,
-            function() SetAlert("flash", not db.alertFlash) end)
-        alertMenu:CreateCheckbox("Chat message",
-            function() return db.alertChat end,
-            function() SetAlert("chat", not db.alertChat) end)
-        alertMenu:CreateDivider()
-        alertMenu:CreateButton("Test alert", function() LevelUpAlert(true) end)
+        root:CreateCheckbox("Fade out of combat",
+            function() return db.fadeOutOfCombat end,
+            function() SetFadeOutOfCombat(not db.fadeOutOfCombat) end)
+
+        AddAlertMenu(root, "Level-up alert", "level", "Test alert", function() LevelUpAlert(true) end)
+        AddAlertMenu(root, "Feed reminder", "feed", "Test reminder", function() FeedAlert(nil, true) end)
 
         AddMediaMenu(root, "Texture", TextureChoices(), "texturePath", SetTexturePath)
 
@@ -1434,6 +1569,10 @@ local HELP = {
     "/petxp happycolor on | off - color the bar by happiness: green, yellow or red",
     "/petxp levelalert sound | flash | chat on | off - what a level up does",
     "/petxp levelalert test - play the level-up alert",
+    "/petxp feedalert sound | flash | chat on | off - the reminder when your pet's happiness drops",
+    "/petxp feedalert test - play the feed reminder",
+    "/petxp fade on | off - fade the bar while out of combat",
+    "/petxp fade " .. MIN_FADE .. "-" .. MAX_FADE .. " - how far it fades, in percent",
     "/petxp text full | short | level | percent | none - how much the bar says",
     "/petxp loyalty on | off - add your pet's loyalty to the bar's text",
     "/petxp happiness on | off - add its happiness, Happy, Content or Unhappy",
@@ -1567,15 +1706,32 @@ SlashCmdList["BEASTXP"] = function(msg)
         else
             Print("use /petxp happycolor on or /petxp happycolor off.")
         end
-    elseif command == "levelalert" or command == "alert" then
+    elseif command == "levelalert" or command == "alert" or command == "feedalert" or command == "feed" then
+        local kind = (command == "feedalert" or command == "feed") and "feed" or "level"
+        local title = kind == "feed" and "feed reminder" or "level-up"
         local part, state = word:match("^(%S+)%s+(%S+)$")
         if word == "test" then
-            LevelUpAlert(true)
-        elseif part and ALERT_KEYS[part] and (state == "on" or state == "off") then
-            SetAlert(part, state == "on")
-            Print(("level-up %s %s."):format(part, state))
+            if kind == "feed" then FeedAlert(nil, true) else LevelUpAlert(true) end
+        elseif part and ALERTS[kind][part] and (state == "on" or state == "off") then
+            SetAlert(kind, part, state == "on")
+            Print(("%s %s %s."):format(title, part, state))
         else
-            Print("use /petxp levelalert sound, flash or chat with on or off, or /petxp levelalert test.")
+            Print(("use /petxp %s sound, flash or chat with on or off, or /petxp %s test.")
+                :format(kind == "feed" and "feedalert" or "levelalert", kind == "feed" and "feedalert" or "levelalert"))
+        end
+    elseif command == "fade" then
+        local percent = tonumber(word:match("^(%d+)%%?$") or "")
+        if word == "on" or word == "off" then
+            SetFadeOutOfCombat(word == "on")
+            Print(db.fadeOutOfCombat and ("the bar fades to %d%% out of combat."):format(db.fadeOpacity)
+                or "the bar stays at full opacity.")
+        elseif percent then
+            SetFadeOpacity(percent)
+            Print(("faded opacity set to %d%%%s."):format(db.fadeOpacity,
+                db.fadeOutOfCombat and "" or "; /petxp fade on turns fading on"))
+        else
+            Print(("use /petxp fade on or off, or an opacity from %d to %d, for example /petxp fade 40.")
+                :format(MIN_FADE, MAX_FADE))
         end
     elseif command == "texture" then
         local texture = FindMedia(TextureChoices(), word)
@@ -1695,6 +1851,13 @@ ns.API = {
     HAPPINESS_TEXT = HAPPINESS_TEXT,
     FlashFrame = FlashFrame,
     TestAlert = function() LevelUpAlert(true) end,
+    TestFeedAlert = function() FeedAlert(nil, true) end,
+    -- The colour a test feed reminder flashes in, for the preview.
+    FeedTestColor = function() return HAPPINESS_COLORS[TestMood()] end,
+    SetFadeOutOfCombat = SetFadeOutOfCombat,
+    SetFadeOpacity = SetFadeOpacity,
+    MIN_FADE = MIN_FADE,
+    MAX_FADE = MAX_FADE,
 
     SetLocked = SetLocked,
     SetShowTooltip = SetShowTooltip,
@@ -1717,6 +1880,7 @@ ns.API = {
     RestartSession = RestartSession,
     SetHappyColor = SetHappyColor,
     SetAlert = SetAlert,
+    ALERTS = ALERTS,
     SetFontPath = SetFontPath,
     SetFontSize = SetFontSize,
     SetOutline = SetOutline,
@@ -1766,6 +1930,16 @@ local PET_EVENTS = {
 
 local events = CreateFrame("Frame")
 events:RegisterEvent("PLAYER_LOGIN")
+
+-- Combat starting and ending only fades the bar, so it is listened for only
+-- while Fade out of combat is on, and only on a character with a bar.
+function WatchCombat()
+    local watch = active and db.fadeOutOfCombat
+    for _, name in ipairs({ "PLAYER_REGEN_DISABLED", "PLAYER_REGEN_ENABLED" }) do
+        if watch then pcall(events.RegisterEvent, events, name) else events:UnregisterEvent(name) end
+    end
+    inCombat = watch and InCombatLockdown() and true or false
+end
 events:SetScript("OnEvent", function(self, event, unit)
     if event == "PLAYER_LOGIN" then
         self:UnregisterEvent("PLAYER_LOGIN")
@@ -1788,6 +1962,7 @@ events:SetScript("OnEvent", function(self, event, unit)
         for _, name in ipairs(PET_EVENTS) do
             pcall(self.RegisterEvent, self, name)
         end
+        WatchCombat()
         -- The game's Edit Mode says when it opens and closes through the
         -- EventRegistry, which calls back through securecallfunction, so the
         -- bar's code cannot taint Edit Mode's.
@@ -1796,6 +1971,13 @@ events:SetScript("OnEvent", function(self, event, unit)
             EventRegistry:RegisterCallback("EditMode.Exit", function() SetEditing(false) end, self)
         end
         Refresh()
+        return
+    end
+
+    -- Read from the event, since InCombatLockdown can lag it as combat starts.
+    if event == "PLAYER_REGEN_DISABLED" or event == "PLAYER_REGEN_ENABLED" then
+        inCombat = event == "PLAYER_REGEN_DISABLED"
+        ApplyFade()
         return
     end
 
