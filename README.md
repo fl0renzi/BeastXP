@@ -5,8 +5,10 @@ A single bar for your hunter pet's experience, for World of Warcraft: Forever. N
 The bar has no border: just a thin dark backing behind the fill, in the purple the game draws
 experience in. It shows the pet's level, its experience into the level and the percentage, for
 example `Level 14   340 / 2150  (15%)`. Hover it for the pet's name, the experience it still
-needs, its loyalty rank (and whether it is gaining or losing loyalty), its happiness and its unspent
-training points, unless you turn the tooltip off.
+needs, its experience per hour and the time to its next level, its loyalty rank (and whether it is
+gaining or losing loyalty), its happiness and its unspent training points, unless you turn the
+tooltip off. When the pet gains a level, the bar flashes, the game's level up sound plays and a line
+in chat says how many training points it has to spend.
 
 ## Settings page
 
@@ -23,6 +25,10 @@ QuestForever lay out theirs:
   The bar is kept whole on the screen.
 - **Text**: the text style, *Loyalty*, *Happiness* and *Training points*, *Font*, a *Font size*
   slider and *Outline*.
+- **Tooltip and session**: *Experience rate* and *Reset session*.
+- **Alerts and colors**: *Color by happiness*, *Preview mood* (shows the preview in each mood's
+  color; the bar is not touched), *Level-up sound*, *Level-up flash*, *Level-up message*, and
+  *Test alert*, which plays the alert on the bar and on the preview.
 - **Defaults** (top right) puts every setting back to how a fresh install has it, but leaves the bar
   where it is. It asks for a second click first.
 
@@ -42,14 +48,18 @@ The bar starts **unlocked** on a fresh install, so you can put it where you want
   solid fill are always there, along with every status bar texture registered with LibSharedMedia.
 - **Color**: right-click the bar and pick from *Bar color*: experience purple (the default), rested
   blue, reputation green, or *Custom color...* for the game's color picker. The bar previews the
-  color as you drag, and Cancel puts the old one back.
+  color as you drag, and Cancel puts the old one back. Tick *Color by happiness* in the same menu
+  and the bar is green while the pet is happy, yellow while it is content and red while it is
+  unhappy, and your own color again whenever the mood is unknown or no pet is out. It is off for a
+  fresh install.
 - **Text**: right-click the bar and pick how much it says under *Text*. Each entry shows an example:
   `Level 14   1290 / 2150  (60%)`, `14  1290/2150  60%`, `14  60%`, `60%`, or no text at all. The
   short style writes large numbers as `12.3k`. Tick *Loyalty*, *Happiness* or *Training points* in
   the same menu to add the pet's loyalty rank, its happiness (`Happy`, `Content` or `Unhappy`, as
   the game's pet panel words it) or its unspent training points after the text, for example
   `15%  Faithful  Happy  25 TP`. All three are off for a fresh install, and *No text* leaves them
-  out too.
+  out too. Whatever the style, a bar shown with no pet out says `No pet`, and while the pet is dead
+  the bar says `Pet dead`, keeping its experience in the fill.
 - **Font**: right-click the bar for the font, the font size and the outline. The four fonts the game
   ships are always listed, along with every LibSharedMedia font.
 - **Lock**: right-click the bar and tick *Lock bar*. A locked bar cannot be moved or resized, hides
@@ -57,6 +67,17 @@ The bar starts **unlocked** on a fresh install, so you can put it where you want
   a pet, so you can place it.
 - **Tooltip**: right-click the bar and untick *Show tooltip*, and hovering over the bar or its grip
   shows nothing. It is on for a fresh install.
+- **Experience rate**: the tooltip shows the pet's experience per hour and the time to its next
+  level, worked out from this login. It counts only while the pet is out, so a dismissed pet does
+  not drag the rate down, and it starts over for a different pet. Until a minute has passed with
+  some experience gained, the tooltip says it is gathering. Untick *Experience rate in tooltip* to
+  leave it out, or use *Reset session* on the settings page to start it over. It is left out at the
+  level cap.
+- **Level-up alert**: when the same pet goes up a level, the game's level up sound plays, the bar
+  flashes white for a second and a line in chat says, for example, `Grimtooth reached level 15. You
+  have 5 training points to spend.` The second sentence is left out when there are none. Summoning,
+  swapping or logging in never raises one. Turn each part off under *Level-up alert* in the
+  right-click menu, which also has *Test alert*. All three are on for a fresh install.
 - **Edit Mode**: open the game's own *Edit Mode* (Esc menu) and the bar joins in: it shows even
   without a pet, lit up in Edit Mode's blue with its name and its X and Y above it, and can be
   dragged and resized even while locked. The X and Y follow the bar as you drag. Hover the bar and
@@ -77,9 +98,14 @@ found by its name or any part of it:
 /petxp height 6-64
 /petxp position <x> <y>   from the center of the screen, for example: 0 -180
 /petxp tooltip on | off
+/petxp rate on | off      experience per hour and time to level in the tooltip
+/petxp session            this session's rate; session reset starts it over
 /petxp texture <name>     for example: blizzard, solid, skills
 /petxp color              opens the color picker
 /petxp color <color>      purple | blue | green | reset | a hex code like 33aaff
+/petxp happycolor on | off  green, yellow or red by the pet's happiness
+/petxp levelalert sound | flash | chat on | off   (alert works too)
+/petxp levelalert test
 /petxp text <style>       full | short | level | percent | none
 /petxp loyalty on | off   the loyalty rank after the text
 /petxp happiness on | off happy, content or unhappy after the text (happy works too)
@@ -117,15 +143,23 @@ Install it from CurseForge, or copy `BeastXP.toc`, `BeastXP.lua` and `BeastXP_Op
 - Settings live in the account-wide `BeastXPDB`. The Forever beta writes a per-character
   SavedVariables file but never loads it back. Every setting applies immediately, with no reload.
 - Event-driven: the bar refreshes on `UNIT_PET`, `UNIT_PET_EXPERIENCE`, `UNIT_LEVEL`,
-  `PET_UI_UPDATE`, `PLAYER_XP_UPDATE` and `PLAYER_ENTERING_WORLD`, never from `OnUpdate`. The one
-  exception is a drag in Edit Mode, where the X and Y follow the bar until it is let go.
+  `PET_UI_UPDATE`, `PLAYER_XP_UPDATE` and `PLAYER_ENTERING_WORLD`, never from `OnUpdate`. The two
+  exceptions are a drag in Edit Mode, where the X and Y follow the bar until it is let go, and the
+  one-second level up flash.
+- Pets are told apart by `UnitGUID("pet")` where the client gives one, and by name otherwise. Each
+  reading is compared with the last, so a summon or a swap is never taken for a level up, and the
+  experience gained across a level boundary counts whichever the game reports first, the level or
+  the experience. The level up chat line waits half a second for the training points.
+- `UNIT_HEALTH` for the pet is read only to notice it dying or coming back; any other health change
+  is ignored without a refresh. A dead pet the client no longer counts as out shows as `No pet`.
   `UNIT_HAPPINESS` and `UNIT_PET_TRAINING_POINTS` keep loyalty, happiness and training points
   current, on the bar and in an open tooltip.
 - A font file another addon ships loads in the background the first time the bar asks for it,
   usually when the pet first shows up after login. Until it is in, the bar's text uses Friz
   Quadrata; the game then switches to the file by itself but does not always draw the text again.
   So while the bar's text has not taken the chosen font, BeastXP looks again every quarter second,
-  for up to ten seconds, and draws the text afresh once it has. That short check is the only timer.
+  for up to ten seconds, and draws the text afresh once it has. That short check and the level up
+  chat line are the only timers.
 - The right-click menu's title and the settings page show the version from the toc, which the
   packager writes from the release tag.
 - Loyalty, happiness and training points come from `C_PetInfo`, read the way the game's own pet

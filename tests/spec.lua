@@ -1379,6 +1379,399 @@ test("without the client's settings window, /petxp says so", function()
 end)
 
 --------------------------------------------------------------------------------
+-- No pet, dead pet
+--------------------------------------------------------------------------------
+
+test("a bar with no pet says so even with no text, and a dead pet says it is dead", function()
+    __boot({ db = { textStyle = "none" } })
+    assert_eq(BeastXPBar.text:GetText(), "No pet", "an empty bar with no pet")
+    __editMode(true)
+    assert_eq(BeastXPBar.text:GetText(), "No pet", "an empty bar in Edit Mode")
+    __editMode(false)
+
+    __boot({ pet = hunterPet() })
+    __pet.dead = true
+    __fire("UNIT_HEALTH", "target")
+    assert_eq(BeastXPBar.text:GetText(), "Level 14   340 / 2150  (15%)", "another unit's death was read")
+    __fire("UNIT_HEALTH", "pet")
+    assert_eq(BeastXPBar.text:GetText(), "Pet dead")
+    assert_eq(BeastXPBar.status:GetValue(), 340, "the fill lost the pet's experience")
+    __script(BeastXPBar, "OnEnter")
+    assert_true(has_line(GameTooltip.__lines, "Dead"), "the tooltip does not say the pet is dead")
+
+    __pet.dead = false
+    __fire("UNIT_HEALTH", "pet")
+    assert_eq(BeastXPBar.text:GetText(), "Level 14   340 / 2150  (15%)", "revival not shown")
+end)
+
+test("health changes refresh nothing until the pet dies, and the rate stops while it is dead", function()
+    __boot({ pet = hunterPet() })
+    __advance(60)
+    __pet.current = 840
+    __fire("UNIT_PET_EXPERIENCE", "pet")
+    -- A health tick that is not a death does not redraw the bar.
+    __pet.current = 900
+    __fire("UNIT_HEALTH", "pet")
+    assert_eq(BeastXPBar.status:GetValue(), 840, "a health tick refreshed the bar")
+
+    __pet.dead = true
+    __fire("UNIT_HEALTH", "pet")
+    __advance(3600)
+    __pet.dead = false
+    __fire("UNIT_HEALTH", "pet")
+    __script(BeastXPBar, "OnEnter")
+    assert_true(has_line(GameTooltip.__lines, "Per hour | 30,000"), "time dead counted, or the revival counted")
+end)
+
+--------------------------------------------------------------------------------
+-- Color by happiness
+--------------------------------------------------------------------------------
+
+test("color by happiness is off until it is turned on, then follows the mood", function()
+    __boot({ pet = hunterPet() })
+    assert_eq(BeastXPDB.happyColor, false, "on for a fresh install")
+    assert_color(BeastXPBar.status, 0.58, 0.0, 0.55, "bar colour with it off")
+
+    SlashCmdList.BEASTXP("happycolor on")
+    assert_true(__printed("colored by your pet's happiness"), "no confirmation")
+    assert_color(BeastXPBar.status, 0.1, 0.7, 0.1, "happy")
+    assert_color(BeastXPBar.track, 0.1, 0.7, 0.1, "happy track")
+
+    __pet.happiness = 2
+    __fire("UNIT_HAPPINESS", "pet")
+    assert_color(BeastXPBar.status, 0.9, 0.75, 0.0, "content")
+    __pet.happiness = 1
+    __fire("UNIT_HAPPINESS", "target")
+    assert_color(BeastXPBar.status, 0.9, 0.75, 0.0, "another unit's mood was read")
+    __fire("UNIT_HAPPINESS", "pet")
+    assert_color(BeastXPBar.status, 0.8, 0.1, 0.1, "unhappy")
+
+    -- A mood the client does not name, or no pet, falls back to the bar colour.
+    __pet.happiness = 7
+    __fire("UNIT_HAPPINESS", "pet")
+    assert_color(BeastXPBar.status, 0.58, 0.0, 0.55, "unknown mood")
+    __pet = nil
+    __fire("UNIT_PET", "player")
+    assert_color(BeastXPBar.status, 0.58, 0.0, 0.55, "no pet")
+
+    __pet = hunterPet({ happiness = 1 })
+    __fire("UNIT_PET", "player")
+    assert_color(BeastXPBar.status, 0.8, 0.1, 0.1, "summoned pet")
+    SlashCmdList.BEASTXP("happycolor off")
+    assert_color(BeastXPBar.status, 0.58, 0.0, 0.55, "turning it off kept the mood colour")
+    SlashCmdList.BEASTXP("happycolor maybe")
+    assert_true(__printed("use /petxp happycolor on"), "no usage for a bad word")
+end)
+
+test("a bar colour picked with color by happiness on waits until it is off", function()
+    __boot({ pet = hunterPet(), db = { happyColor = true } })
+    SlashCmdList.BEASTXP("color blue")
+    assert_color(BeastXPBar.status, 0.1, 0.7, 0.1, "the pick replaced the mood colour")
+    SlashCmdList.BEASTXP("happycolor off")
+    assert_color(BeastXPBar.status, 0.0, 0.39, 0.88, "the pick was lost")
+end)
+
+test("the menu and the settings page turn color by happiness on, and the preview shows each mood", function()
+    __boot({ pet = hunterPet() })
+    __script(BeastXPBar, "OnMouseUp", "RightButton")
+    local item = __menu_item("Bar color", "Color by happiness")
+    assert_true(item, "no Color by happiness in the Bar color menu")
+    __menu_click(item)
+    assert_true(BeastXPDB.happyColor, "menu did not turn it on")
+
+    open_page()
+    local check = __control("Color by happiness", "UICheckButtonTemplate")
+    assert_true(check:GetChecked(), "box not ticked")
+    local preview = __control("Preview", nil, "Frame")
+    assert_color(preview.status, 0.1, 0.7, 0.1, "preview of a happy pet")
+
+    local moods = __control("Preview mood", "WowStyle1DropdownTemplate")
+    __dropdown_pick(moods, "Unhappy")
+    assert_color(preview.status, 0.8, 0.1, 0.1, "preview mood")
+    assert_color(BeastXPBar.status, 0.1, 0.7, 0.1, "the preview mood reached the bar")
+    SlashCmdList.BEASTXP("happiness on")
+    assert_eq(preview.text:GetText(), "Level 14   340 / 2150  (15%)   Unhappy", "preview text not in the preview mood")
+    __dropdown_pick(moods, "Your pet's")
+    assert_color(preview.status, 0.1, 0.7, 0.1, "preview back to the pet's mood")
+
+    check:SetChecked(false)
+    __script(check, "OnClick")
+    assert_false(BeastXPDB.happyColor, "box did not turn it off")
+    assert_color(BeastXPBar.status, 0.58, 0.0, 0.55)
+end)
+
+--------------------------------------------------------------------------------
+-- Level-up alert
+--------------------------------------------------------------------------------
+
+test("a level up plays the sound, flashes the bar and names the training points", function()
+    __boot({ pet = hunterPet({ training = { 10, 5 } }) })
+    assert_eq(#__sounds, 0, "an alert at login")
+    __pet.level, __pet.current, __pet.max = 15, 100, 2500
+    __fire("UNIT_LEVEL", "pet")
+    assert_eq(__sounds[1], 888, "no level up sound")
+    assert_true(BeastXPBar.flasher:IsShown(), "no flash")
+    assert_false(__printed("reached level"), "the chat line did not wait for the training points")
+    __pet.training = { 15, 5 }
+    __advance(0.5)
+    assert_true(__printed("Grimtooth reached level 15. You have 10 training points to spend."),
+        "no chat line, or stale training points")
+end)
+
+test("the flash fades in and out over a second, then stops", function()
+    __boot({ pet = hunterPet() })
+    __pet.level = 15
+    __fire("UNIT_LEVEL", "pet")
+    local flasher, flash = BeastXPBar.flasher, BeastXPBar.flash
+    assert_eq(flash.__blend, "ADD")
+    __script(flasher, "OnUpdate", 0.125)
+    assert_true(math.abs(flash:GetAlpha() - 0.3) < 0.001, "not fading in")
+    __script(flasher, "OnUpdate", 0.125)
+    assert_true(math.abs(flash:GetAlpha() - 0.6) < 0.001, "not at its peak")
+    __script(flasher, "OnUpdate", 0.375)
+    assert_true(math.abs(flash:GetAlpha() - 0.3) < 0.001, "not fading out")
+    __script(flasher, "OnUpdate", 0.5)
+    assert_eq(flash:GetAlpha(), 0)
+    assert_false(flasher:IsShown(), "the flash kept running")
+end)
+
+test("the chat line leaves out training points when there are none", function()
+    __boot({ pet = hunterPet({ training = { 5, 5 } }) })
+    __pet.level = 15
+    __fire("UNIT_LEVEL", "pet")
+    __advance(1)
+    assert_true(__printed("Grimtooth reached level 15."), "no chat line")
+    assert_false(__printed("training point"), "zero training points named")
+end)
+
+test("a summon, a swap, a resummon or a login never raise a level up alert", function()
+    __boot({ pet = hunterPet({ level = 20 }) })
+    __pet = nil
+    __fire("UNIT_PET", "player")
+    __pet = hunterPet({ level = 30, name = "Claw" })
+    __fire("UNIT_PET", "player")
+    -- Straight from one pet to another, with no dismissal between.
+    __pet = hunterPet({ level = 40, name = "Fang" })
+    __fire("UNIT_PET", "player")
+    -- The first pet back, a level higher than when it left.
+    __pet = nil
+    __fire("UNIT_PET", "player")
+    __pet = hunterPet({ level = 21 })
+    __fire("UNIT_PET", "player")
+    __advance(1)
+    assert_eq(#__sounds, 0, "a sound for a pet change")
+    assert_false(__printed("reached level"), "a chat line for a pet change")
+    assert_false(BeastXPBar.flasher:IsShown(), "a flash for a pet change")
+
+    -- Pets told apart by GUID even when they share a name.
+    __boot({ pet = hunterPet({ guid = "Pet-1" }) })
+    __pet = hunterPet({ guid = "Pet-2", level = 30 })
+    __fire("UNIT_PET", "player")
+    assert_eq(#__sounds, 0, "a same-named pet swap read as a level up")
+end)
+
+test("level up events close together raise one alert", function()
+    __boot({ pet = hunterPet() })
+    __pet.level = 15
+    __fire("UNIT_LEVEL", "pet")
+    __pet.level = 16
+    __fire("UNIT_LEVEL", "pet")
+    assert_eq(#__sounds, 1, "alerts stacked")
+    __advance(3)
+    __pet.level = 17
+    __fire("UNIT_LEVEL", "pet")
+    assert_eq(#__sounds, 2, "the cooldown never ended")
+end)
+
+test("each part of the alert turns off on its own", function()
+    __boot({ pet = hunterPet() })
+    SlashCmdList.BEASTXP("levelalert sound off")
+    assert_true(__printed("level-up sound off"), "no confirmation")
+    SlashCmdList.BEASTXP("levelalert flash off")
+    SlashCmdList.BEASTXP("alert chat off")
+    assert_false(BeastXPDB.alertSound or BeastXPDB.alertFlash or BeastXPDB.alertChat, "a part stayed on")
+    __pet.level = 15
+    __fire("UNIT_LEVEL", "pet")
+    __advance(1)
+    assert_eq(#__sounds, 0, "sound played")
+    assert_false(BeastXPBar.flasher:IsShown(), "flashed")
+    assert_false(__printed("reached level"), "chat line printed")
+
+    SlashCmdList.BEASTXP("levelalert loud on")
+    assert_true(__printed("use /petxp levelalert sound, flash or chat"), "no usage for a bad part")
+end)
+
+test("a locked bar still flashes, and a test alert plays every part that is on", function()
+    __boot({ pet = hunterPet({ training = { 3, 0 } }), db = { locked = true } })
+    SlashCmdList.BEASTXP("levelalert test")
+    assert_eq(#__sounds, 1, "no test sound")
+    assert_true(BeastXPBar.flasher:IsShown(), "a locked bar did not flash")
+    __advance(1)
+    assert_true(__printed("Grimtooth reached level 15. You have 3 training points to spend."), "no test chat line")
+
+    -- No pet and a locked bar: nothing to flash, and a sample pet in chat.
+    __boot({ db = { locked = true } })
+    SlashCmdList.BEASTXP("levelalert test")
+    __advance(1)
+    assert_true(__printed("Your pet reached level 15. You have 5 training points to spend."), "no sample line")
+end)
+
+test("the settings page and the menu set up the alert", function()
+    __boot({ pet = hunterPet() })
+    open_page()
+    local sound = __control("Level-up sound", "UICheckButtonTemplate")
+    assert_true(sound:GetChecked(), "sound off for a fresh install")
+    sound:SetChecked(false)
+    __script(sound, "OnClick")
+    assert_false(BeastXPDB.alertSound, "the box did not turn the sound off")
+    assert_true(__control("Level-up flash", "UICheckButtonTemplate"):GetChecked())
+    assert_true(__control("Level-up message", "UICheckButtonTemplate"):GetChecked())
+
+    __script(__page_button("Test alert"), "OnClick")
+    assert_eq(#__sounds, 0, "the test played a sound that is off")
+    assert_true(__control("Preview", nil, "Frame").flasher:IsShown(), "the preview did not flash")
+
+    __script(BeastXPBar, "OnMouseUp", "RightButton")
+    local chat = __menu_item("Level-up alert", "Chat message")
+    assert_true(chat, "no Level-up alert menu")
+    __menu_click(chat)
+    assert_false(BeastXPDB.alertChat, "the menu did not turn the chat line off")
+    assert_false(__control("Level-up message", "UICheckButtonTemplate"):GetChecked(), "page not in step")
+end)
+
+--------------------------------------------------------------------------------
+-- Experience rate
+--------------------------------------------------------------------------------
+
+local function tooltip()
+    __script(BeastXPBar, "OnEnter")
+    return GameTooltip.__lines
+end
+
+test("the tooltip gathers for a minute, then shows the rate and the time to level", function()
+    __boot({ pet = hunterPet() })
+    assert_true(has_line(tooltip(), "Gathering experience rate..."), "no gathering line")
+
+    -- Half a minute and a gain: still gathering.
+    __advance(30)
+    __pet.current = 840
+    __fire("UNIT_PET_EXPERIENCE", "pet")
+    assert_true(has_line(tooltip(), "Gathering experience rate..."), "guessed after 30 seconds")
+
+    -- A minute and 500 gained: 30,000 an hour, 1310 left takes 2.6 minutes.
+    __advance(30)
+    local lines = tooltip()
+    assert_true(has_line(lines, "Per hour | 30,000"), "no rate")
+    assert_true(has_line(lines, "Time to level | 3m"), "no time to level")
+
+    -- Across a level: the 1310 left of level 14, then 190 into level 15.
+    __advance(60)
+    __pet.level, __pet.current, __pet.max = 15, 190, 2500
+    __fire("UNIT_LEVEL", "pet")
+    lines = tooltip()
+    assert_true(has_line(lines, "Per hour | 60,000"), "a level up was not counted right")
+    assert_true(has_line(lines, "Time to level | 3m"), "time to level not from the new level")
+end)
+
+test("a level up counts the same whichever the game reports first, the level or the experience", function()
+    -- The level first, while the experience still reads as the old level's.
+    __boot({ pet = hunterPet({ current = 2000 }) })
+    __advance(60)
+    __pet.level = 15
+    __fire("UNIT_LEVEL", "pet")
+    __pet.current, __pet.max = 100, 2500
+    __fire("UNIT_PET_EXPERIENCE", "pet")
+    assert_true(has_line(tooltip(), "Per hour | 15,000"), "level first: not 250 gained")
+
+    -- The experience first, dropping on the old level.
+    __boot({ pet = hunterPet({ current = 2000 }) })
+    __advance(60)
+    __pet.current, __pet.max = 100, 2500
+    __fire("UNIT_PET_EXPERIENCE", "pet")
+    __pet.level = 15
+    __fire("UNIT_LEVEL", "pet")
+    assert_true(has_line(tooltip(), "Per hour | 15,000"), "experience first: not 250 gained")
+    assert_eq(#__sounds, 1, "one alert for the level")
+end)
+
+test("a drop, a resummon or a dismissal never count, and a different pet starts over", function()
+    __boot({ pet = hunterPet() })
+    __advance(60)
+    __pet.current = 840
+    __fire("UNIT_PET_EXPERIENCE", "pet")
+    assert_true(has_line(tooltip(), "Per hour | 30,000"))
+
+    -- Away for an hour: the clock stops, and nothing counts on the way back.
+    __pet = nil
+    __fire("UNIT_PET", "player")
+    __advance(3600)
+    __pet = hunterPet({ current = 900 })
+    __fire("UNIT_PET", "player")
+    assert_true(has_line(tooltip(), "Per hour | 30,000"), "time away or the resummon counted")
+
+    -- A drop in experience on the same level counts nothing.
+    __pet.current = 100
+    __fire("UNIT_PET_EXPERIENCE", "pet")
+    assert_true(has_line(tooltip(), "Per hour | 30,000"), "a drop counted")
+
+    __pet = hunterPet({ name = "Claw", current = 1000 })
+    __fire("UNIT_PET", "player")
+    assert_true(has_line(tooltip(), "Gathering experience rate..."), "another pet kept the rate")
+end)
+
+test("the rate can be turned off and started over, and is left out at the level cap", function()
+    __boot({ pet = hunterPet() })
+    __advance(60)
+    __pet.current = 840
+    __fire("UNIT_PET_EXPERIENCE", "pet")
+    SlashCmdList.BEASTXP("session")
+    assert_true(__printed("30,000 experience per hour, level in 3m."), "no session report")
+
+    SlashCmdList.BEASTXP("session reset")
+    assert_true(__printed("experience rate started over"), "no confirmation")
+    assert_true(has_line(tooltip(), "Gathering experience rate..."), "the reset kept the rate")
+    SlashCmdList.BEASTXP("session")
+    assert_true(__printed("still gathering"), "no gathering report")
+
+    SlashCmdList.BEASTXP("rate off")
+    for _, line in ipairs(tooltip()) do
+        assert_false(line:find("Per hour", 1, true) or line:find("Gathering", 1, true), "rate shown while off: " .. line)
+    end
+
+    SlashCmdList.BEASTXP("rate on")
+    __pet.level, __pet.current, __pet.max = 60, 0, 0
+    __fire("UNIT_LEVEL", "pet")
+    for _, line in ipairs(tooltip()) do
+        assert_false(line:find("Per hour", 1, true) or line:find("Gathering", 1, true), "rate shown at the cap: " .. line)
+    end
+end)
+
+test("the settings page turns the rate off and starts the session over", function()
+    __boot({ pet = hunterPet() })
+    __advance(60)
+    __pet.current = 840
+    __fire("UNIT_PET_EXPERIENCE", "pet")
+    open_page()
+    local rate = __control("Experience rate", "UICheckButtonTemplate")
+    assert_true(rate:GetChecked(), "rate off for a fresh install")
+    __script(__page_button("Reset session"), "OnClick")
+    assert_true(has_line(tooltip(), "Gathering experience rate..."), "the button kept the rate")
+    rate:SetChecked(false)
+    __script(rate, "OnClick")
+    assert_false(BeastXPDB.tooltipRate, "the box did not turn the rate off")
+end)
+
+test("an upgrade from 1.3.0 keeps its settings and takes the new defaults", function()
+    __boot({ pet = hunterPet(), db = { locked = true, textHappiness = true, fontSize = 14, alertChat = "yes" } })
+    assert_eq(BeastXPDB.locked, true)
+    assert_eq(BeastXPDB.fontSize, 14)
+    assert_eq(BeastXPDB.tooltipRate, true)
+    assert_eq(BeastXPDB.happyColor, false)
+    assert_eq(BeastXPDB.alertSound, true)
+    assert_eq(BeastXPDB.alertChat, true, "a broken value kept")
+end)
+
+--------------------------------------------------------------------------------
 -- Slash commands
 --------------------------------------------------------------------------------
 

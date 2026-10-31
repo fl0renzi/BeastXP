@@ -7,7 +7,8 @@
 -- short, offers the same options as slash commands.
 --
 -- Cost: the bar is built the first time there is something to show, and it is
--- refreshed from the pet events only, never from OnUpdate. A character that is
+-- refreshed from the pet events only, never from OnUpdate; only the second-long
+-- level up flash runs on one, while it plays. A character that is
 -- not a hunter unregisters everything at login and pays nothing after that.
 
 local addonName, ns = ...
@@ -76,8 +77,34 @@ local COLOR_PRESETS = {
     { key = "green",  name = "Reputation green",  color = { 0.0, 0.6, 0.1 } },
 }
 
+-- With Color by happiness on, the bar takes the pet's mood colour instead,
+-- by the number GetPetHappiness reports: 1 unhappy, 2 content, 3 happy.
+local HAPPINESS_COLORS = {
+    { 0.8, 0.1, 0.1 },
+    { 0.9, 0.75, 0.0 },
+    { 0.1, 0.7, 0.1 },
+}
+
 -- The empty part of the bar is the bar colour at this opacity.
 local TRACK_ALPHA = 0.25
+
+-- A level up washes the bar in white: in over FLASH_IN seconds to FLASH_PEAK,
+-- then out until FLASH_TIME.
+local FLASH_TEXTURE = "Interface\\Buttons\\WHITE8X8"
+local FLASH_IN, FLASH_TIME, FLASH_PEAK = 0.25, 1.0, 0.6
+
+-- The chat line waits ALERT_DELAY seconds for the training points, which the
+-- game may update just after the level. Alerts closer together than
+-- ALERT_COOLDOWN are one alert.
+local ALERT_DELAY = 0.5
+local ALERT_COOLDOWN = 2
+
+-- The sound the game plays for the player's own level up.
+local LEVEL_UP_SOUND = 888
+
+-- The tooltip's experience rate waits for RATE_MIN_TIME seconds of the pet
+-- being out, and at least one gain, before it guesses.
+local RATE_MIN_TIME = 60
 
 -- The colours the game's own tooltips use for a label, for a hint line, and
 -- for good and bad news.
@@ -160,6 +187,14 @@ local DEFAULTS = {
     textLoyalty   = false,
     textHappiness = false,
     textTraining  = false,
+    -- The tooltip's experience per hour and time to the next level.
+    tooltipRate  = true,
+    -- The bar in the pet's mood colour rather than barColor.
+    happyColor   = false,
+    -- What a level up does.
+    alertSound   = true,
+    alertFlash   = true,
+    alertChat    = true,
 }
 
 --------------------------------------------------------------------------------
@@ -175,7 +210,19 @@ local editing = false -- the game's Edit Mode is open
 
 -- The pet as last read. One table, refilled in place, so a refresh allocates
 -- nothing.
-local pet = { present = false, current = 0, max = 0, level = nil }
+local pet = { present = false, current = 0, max = 0, level = nil, dead = false }
+
+-- The last reading of the pet that is out, kept so the next one can tell the
+-- same pet gaining experience or a level from another pet being summoned. All
+-- nil while no pet is out, so the first reading after a summon, a swap or a
+-- login only sets the baseline.
+local seen = { id = nil, level = nil, current = nil, max = nil }
+
+-- This login's experience for the tooltip's rate: which pet it is for, the
+-- experience gained, and how long that pet has been out. Kept in memory only.
+-- The clock stops while the pet is away, so a dismissed pet does not drag the
+-- rate down, and a different pet starts it over.
+local session = { id = nil, gained = 0, elapsed = 0, since = nil }
 
 --------------------------------------------------------------------------------
 -- Helpers
@@ -277,7 +324,7 @@ local function ReadPet()
     hasUI, isHunterPet = SafeValue(hasUI), SafeValue(isHunterPet)
     pet.present = (hasUI and isHunterPet) and true or false
     if not pet.present then
-        pet.current, pet.max, pet.level = 0, 0, nil
+        pet.current, pet.max, pet.level, pet.dead = 0, 0, nil, false
         return
     end
 
@@ -288,6 +335,10 @@ local function ReadPet()
 
     local level = SafeValue(UnitLevel("pet"))
     pet.level = (type(level) == "number" and level > 0) and math.floor(level) or nil
+
+    -- A dead pet the client still counts as out. One it stops counting reads
+    -- as no pet at all.
+    pet.dead = type(UnitIsDead) == "function" and SafeValue(UnitIsDead("pet")) == true
 end
 
 -- A number for the short style: 12345 becomes 12.3k.
@@ -299,8 +350,10 @@ end
 -- A pet's text in the given style (see TEXT_STYLES). Any part the game did not
 -- report, the level or the experience, is left out rather than shown as 0.
 local function StyleText(style, present, level, current, max)
-    if style == "none" then return "" end
+    -- A bar shown with no pet out says so whatever the style, so an empty bar
+    -- never looks broken.
     if not present then return "No pet" end
+    if style == "none" then return "" end
 
     local percent = max > 0 and math.floor(current / max * 100) or nil
 
@@ -369,8 +422,8 @@ end
 -- GetPetHappiness reports: 1 unhappy, 2 content, 3 happy.
 local HAPPINESS_TEXT = { "Unhappy", "Content", "Happy" }
 
--- The pet's mood as the game's own pet panel words it, for example "Happy".
-local function PetHappiness()
+-- The pet's mood as that number, or nil.
+local function PetMood()
     local info = C_PetInfo
     if not (info and info.GetPetHappiness) then return nil end
     local happiness = SafeValue((info.GetPetHappiness()))
@@ -379,7 +432,13 @@ local function PetHappiness()
     -- catches a not-a-number read too, which would be an invalid table index.
     local mood = math.floor(happiness)
     if not (mood >= 1 and mood <= 3) then return nil end
-    return HAPPINESS_TEXT[mood]
+    return mood
+end
+
+-- The pet's mood as the game's own pet panel words it, for example "Happy".
+local function PetHappiness()
+    local mood = PetMood()
+    return mood and HAPPINESS_TEXT[mood]
 end
 
 -- Unspent training points. The trainer never shows fewer than none.
@@ -392,7 +451,119 @@ local function PetTrainingPoints()
     return math.max(total - used, 0)
 end
 
+--------------------------------------------------------------------------------
+-- Following the pet
+--------------------------------------------------------------------------------
+
+local function Now()
+    return type(GetTime) == "function" and GetTime() or 0
+end
+
+-- Which pet is out: its GUID where the client gives one, its name otherwise.
+-- nil when neither can be read, and the pet is then not followed.
+local function PetIdentity()
+    local guid = type(UnitGUID) == "function" and SafeValue(UnitGUID("pet")) or nil
+    if type(guid) == "string" and guid ~= "" then return guid end
+    local name = SafeValue(UnitName("pet"))
+    if type(name) == "string" and name ~= "" then return name end
+    return nil
+end
+
+local function SessionTime()
+    return session.elapsed + (session.since and (Now() - session.since) or 0)
+end
+
+local function StartSession(id)
+    session.id, session.gained, session.elapsed = id, 0, 0
+    session.since = id and Now() or nil
+end
+
+-- /petxp session reset and the settings page's button: the rate starts over
+-- for the pet that is out now.
+local function ResetSession()
+    StartSession(session.since and session.id or nil)
+end
+
+-- Compares the reading ReadPet just took with the last one. Counts the
+-- experience the same pet gained, across a level boundary too, and returns
+-- true when that pet went up a level. A drop, a lower level or a different
+-- pet counts nothing.
+local function FollowPet()
+    -- A dead pet is away: the clock stops, and its revival sets a baseline.
+    local id = pet.present and not pet.dead and pet.level and PetIdentity() or nil
+    if not id then
+        if session.since then
+            session.elapsed = session.elapsed + (Now() - session.since)
+            session.since = nil
+        end
+        seen.id, seen.level, seen.current, seen.max = nil, nil, nil, nil
+        return false
+    end
+
+    if id ~= session.id or (seen.id == id and pet.level < seen.level) then
+        StartSession(id)
+    elseif not session.since then
+        session.since = Now()
+    end
+
+    -- The game may report the new level and the new experience in separate
+    -- events, in either order. Experience that drops on the same level is the
+    -- new level's arriving first: the old reading is kept until the level
+    -- follows. A level whose experience still reads as the old level's counts
+    -- the rest of the old level only, and the next reading counts from 0.
+    local leveled = false
+    local current = pet.current
+    if seen.id == id then
+        if pet.level > seen.level then
+            leveled = true
+            if seen.max > 0 then
+                session.gained = session.gained + (seen.max - seen.current)
+            end
+            if pet.max == seen.max then
+                current = 0
+            else
+                session.gained = session.gained + pet.current
+            end
+        elseif pet.level == seen.level then
+            if pet.current < seen.current then return false end
+            session.gained = session.gained + (pet.current - seen.current)
+        end
+    end
+    seen.id, seen.level, seen.current, seen.max = id, pet.level, current, pet.max
+    return leveled
+end
+
+-- Experience per hour and seconds to the next level, from this session. nil
+-- until there is enough to go on, or at the level cap.
+local function PetRate()
+    if not (pet.present and pet.max > 0 and session.id) then return nil end
+    local elapsed = SessionTime()
+    if elapsed < RATE_MIN_TIME or session.gained <= 0 then return nil end
+    local perSecond = session.gained / elapsed
+    return perSecond * 3600, math.max(pet.max - pet.current, 0) / perSecond
+end
+
+-- 12345 becomes 12,345.
+local function GroupedNumber(value)
+    local text = ("%d"):format(Round(value))
+    local count
+    repeat
+        text, count = text:gsub("^(-?%d+)(%d%d%d)", "%1,%2")
+    until count == 0
+    return text
+end
+
+-- Seconds as hours and minutes: 5100 becomes 1h 25m.
+local function Duration(seconds)
+    local minutes = math.ceil(seconds / 60)
+    if minutes < 60 then return ("%dm"):format(math.max(minutes, 1)) end
+    return ("%dh %dm"):format(math.floor(minutes / 60), minutes % 60)
+end
+
 local function BarText()
+    -- The fill keeps the pet's experience; the text says why it is not
+    -- moving.
+    if pet.present and pet.dead then return "Pet dead" end
     local loyalty = db.textLoyalty and pet.present and PetLoyalty() or nil
     local happiness = db.textHappiness and pet.present and PetHappiness() or nil
     local points = db.textTraining and pet.present and PetTrainingPoints() or nil
@@ -418,6 +589,9 @@ local function ShowTooltip(owner)
 
     if pet.present then
         GameTooltip:AddLine(SafeValue(UnitName("pet")) or "Your pet", 1, 1, 1)
+        if pet.dead then
+            GameTooltip:AddLine("Dead", unpack(LOSS_COLOR))
+        end
         if pet.level then
             GameTooltip:AddLine(("Level %d"):format(pet.level), 1, 1, 1)
         end
@@ -426,6 +600,17 @@ local function ShowTooltip(owner)
                 LABEL_COLOR[1], LABEL_COLOR[2], LABEL_COLOR[3], 1, 1, 1)
             GameTooltip:AddDoubleLine("To next level", ("%d"):format(pet.max - pet.current),
                 LABEL_COLOR[1], LABEL_COLOR[2], LABEL_COLOR[3], 1, 1, 1)
+            if db.tooltipRate then
+                local perHour, toLevel = PetRate()
+                if perHour then
+                    GameTooltip:AddDoubleLine("Per hour", GroupedNumber(perHour),
+                        LABEL_COLOR[1], LABEL_COLOR[2], LABEL_COLOR[3], 1, 1, 1)
+                    GameTooltip:AddDoubleLine("Time to level", Duration(toLevel),
+                        LABEL_COLOR[1], LABEL_COLOR[2], LABEL_COLOR[3], 1, 1, 1)
+                else
+                    GameTooltip:AddLine("Gathering experience rate...", unpack(HINT_COLOR))
+                end
+            end
         end
 
         local loyalty = PetLoyalty()
@@ -536,6 +721,38 @@ local function BuildBarVisuals(frame)
     text:SetJustifyH("CENTER")
     text:SetWordWrap(false)
     frame.text = text
+
+    -- The level up flash: a white wash over the fill, under the text, faded
+    -- in and out by a frame that is only shown, and only runs, while it plays.
+    local flash = status:CreateTexture(nil, "ARTWORK", nil, 7)
+    flash:SetAllPoints(status)
+    flash:SetTexture(FLASH_TEXTURE)
+    flash:SetBlendMode("ADD")
+    flash:SetAlpha(0)
+    frame.flash = flash
+
+    local flasher = CreateFrame("Frame", nil, frame)
+    flasher:Hide()
+    flasher:SetScript("OnUpdate", function(self, elapsed)
+        self.time = self.time + elapsed
+        local t = self.time
+        if t >= FLASH_TIME then
+            flash:SetAlpha(0)
+            self:Hide()
+        elseif t < FLASH_IN then
+            flash:SetAlpha(FLASH_PEAK * t / FLASH_IN)
+        else
+            flash:SetAlpha(FLASH_PEAK * (1 - (t - FLASH_IN) / (FLASH_TIME - FLASH_IN)))
+        end
+    end)
+    frame.flasher = flasher
+end
+
+-- Plays the flash on the bar or the settings preview, from the start.
+local function FlashFrame(frame)
+    frame.flasher.time = 0
+    frame.flash:SetAlpha(0)
+    frame.flasher:Show()
 end
 
 -- SetFont returns false when the file cannot be loaded. The chosen font falls
@@ -589,9 +806,13 @@ local function ApplyFont(frame)
     if frame == bar then WatchBarFont() end
 end
 
--- The bar colour, on the fill and, dimmed, on the track behind it.
+-- The bar colour, on the fill and, dimmed, on the track behind it. With Color
+-- by happiness on, the colour of the mood the frame shows (frame.mood, set by
+-- Refresh for the bar and by the settings page for its preview), and the bar
+-- colour while the mood is unknown or no pet is out.
 local function ApplyColor(frame)
-    local r, g, b = db.barColor[1], db.barColor[2], db.barColor[3]
+    local color = db.happyColor and frame.mood and HAPPINESS_COLORS[frame.mood] or db.barColor
+    local r, g, b = color[1], color[2], color[3]
     frame.status:SetStatusBarColor(r, g, b)
     frame.track:SetVertexColor(r, g, b, TRACK_ALPHA)
 end
@@ -740,11 +961,50 @@ local function EnsureBar()
     return bar
 end
 
+-- The level up alert, in the three parts the settings turn on: the game's
+-- level up sound, the flash on the bar, and a line in chat. The chat line
+-- waits a moment for the training points, which the game may update just
+-- after the level. A test, from the settings page or /petxp levelalert test,
+-- plays every part that is on, whatever the cooldown, and names the next
+-- level of the pet that is out, or a sample one.
+local lastAlert -- when the last alert played
+
+local function AlertText(name, level, points)
+    local text = ("%s reached level %d."):format(name, level)
+    if points and points > 0 then
+        text = text .. (" You have %d training point%s to spend."):format(points, points == 1 and "" or "s")
+    end
+    return text
+end
+
+local function LevelUpAlert(test)
+    local now = Now()
+    if not test and lastAlert and now - lastAlert < ALERT_COOLDOWN then return end
+    lastAlert = now
+
+    if db.alertSound and type(PlaySound) == "function" then
+        PlaySound(SOUNDKIT and SOUNDKIT.LEVEL_UP or LEVEL_UP_SOUND)
+    end
+    if db.alertFlash and bar and bar:IsShown() then FlashFrame(bar) end
+    if not db.alertChat then return end
+
+    local name = pet.present and SafeValue(UnitName("pet")) or nil
+    if type(name) ~= "string" or name == "" then name = "Your pet" end
+    local level = pet.level or 14
+    if test then level = level + 1 end
+    local function Say()
+        local points = pet.present and PetTrainingPoints() or (test and 5) or nil
+        Print(AlertText(name, level, points))
+    end
+    if C_Timer and C_Timer.After then C_Timer.After(ALERT_DELAY, Say) else Say() end
+end
+
 -- The one place the bar is updated. It shows while a hunter pet is out, and
 -- also while the bar can be moved, so it can be placed before there is a pet.
 local function Refresh()
     if not active then return end
     ReadPet()
+    local leveled = FollowPet()
 
     if not pet.present and not CanMove() then
         if bar then bar:Hide() end
@@ -752,6 +1012,8 @@ local function Refresh()
     end
 
     local frame = EnsureBar()
+    frame.mood = pet.present and PetMood() or nil
+    ApplyColor(frame)
     if pet.present and pet.max > 0 then
         frame.status:SetMinMaxValues(0, pet.max)
         frame.status:SetValue(math.min(pet.current, pet.max))
@@ -761,6 +1023,7 @@ local function Refresh()
     end
     frame.text:SetText(BarText())
     frame:Show()
+    if leveled then LevelUpAlert(false) end
 
     if GameTooltip:IsShown() and GameTooltip:GetOwner() == frame then
         ShowTooltip(frame)
@@ -887,6 +1150,26 @@ local function SetTextTraining(show)
     NotifyChanged()
 end
 
+local function SetTooltipRate(show)
+    db.tooltipRate = show and true or false
+    Refresh()
+    NotifyChanged()
+end
+
+local function SetHappyColor(on)
+    db.happyColor = on and true or false
+    if bar then ApplyColor(bar) end
+    NotifyChanged()
+end
+
+-- What a level up does, by part: "sound", "flash" or "chat".
+local ALERT_KEYS = { sound = "alertSound", flash = "alertFlash", chat = "alertChat" }
+
+local function SetAlert(part, on)
+    db[ALERT_KEYS[part]] = on and true or false
+    NotifyChanged()
+end
+
 -- The size from the settings page's sliders. The bar keeps its place.
 local function SetBarSize(width, height)
     db.width = Clamp(Round(width), MIN_WIDTH, MaxWidth())
@@ -976,6 +1259,13 @@ local function ResetDefaults()
     NotifyChanged()
 end
 
+-- /petxp session reset and the settings page's button. An open tooltip
+-- shows the rate starting over.
+local function RestartSession()
+    ResetSession()
+    Refresh()
+end
+
 --------------------------------------------------------------------------------
 -- Right-click menu
 --------------------------------------------------------------------------------
@@ -1052,6 +1342,22 @@ function ShowMenu(owner)
         root:CreateCheckbox("Show tooltip",
             function() return db.showTooltip end,
             function() SetShowTooltip(not db.showTooltip) end)
+        root:CreateCheckbox("Experience rate in tooltip",
+            function() return db.tooltipRate end,
+            function() SetTooltipRate(not db.tooltipRate) end)
+
+        local alertMenu = root:CreateButton("Level-up alert")
+        alertMenu:CreateCheckbox("Sound",
+            function() return db.alertSound end,
+            function() SetAlert("sound", not db.alertSound) end)
+        alertMenu:CreateCheckbox("Flash",
+            function() return db.alertFlash end,
+            function() SetAlert("flash", not db.alertFlash) end)
+        alertMenu:CreateCheckbox("Chat message",
+            function() return db.alertChat end,
+            function() SetAlert("chat", not db.alertChat) end)
+        alertMenu:CreateDivider()
+        alertMenu:CreateButton("Test alert", function() LevelUpAlert(true) end)
 
         AddMediaMenu(root, "Texture", TextureChoices(), "texturePath", SetTexturePath)
 
@@ -1063,6 +1369,10 @@ function ShowMenu(owner)
                 function() SetBarColor(color[1], color[2], color[3]) end)
         end
         colorMenu:CreateButton("Custom color...", function() OpenColorPicker() end)
+        colorMenu:CreateDivider()
+        colorMenu:CreateCheckbox("Color by happiness",
+            function() return db.happyColor end,
+            function() SetHappyColor(not db.happyColor) end)
 
         local textMenu = root:CreateButton("Text")
         for _, style in ipairs(TEXT_STYLES) do
@@ -1117,8 +1427,13 @@ local HELP = {
     "/petxp height " .. MIN_HEIGHT .. "-" .. MAX_HEIGHT .. " - the bar's height",
     "/petxp position <x> <y> - where the bar sits, measured from the center of the screen",
     "/petxp tooltip on | off - the tooltip when you hover over the bar",
+    "/petxp rate on | off - experience per hour and time to level in the tooltip",
+    "/petxp session - this session's rate; /petxp session reset starts it over",
     "/petxp texture <name> - for example blizzard, solid or a LibSharedMedia texture",
     "/petxp color - pick the bar color, or give purple | blue | green | a hex code like 33aaff",
+    "/petxp happycolor on | off - color the bar by happiness: green, yellow or red",
+    "/petxp levelalert sound | flash | chat on | off - what a level up does",
+    "/petxp levelalert test - play the level-up alert",
     "/petxp text full | short | level | percent | none - how much the bar says",
     "/petxp loyalty on | off - add your pet's loyalty to the bar's text",
     "/petxp happiness on | off - add its happiness, Happy, Content or Unhappy",
@@ -1220,6 +1535,47 @@ SlashCmdList["BEASTXP"] = function(msg)
                 or "tooltip off: hovering over the bar shows nothing.")
         else
             Print("use /petxp tooltip on or /petxp tooltip off.")
+        end
+    elseif command == "rate" then
+        if word == "on" or word == "off" then
+            SetTooltipRate(word == "on")
+            Print(db.tooltipRate and "the tooltip shows your pet's experience per hour and time to level."
+                or "the tooltip leaves the experience rate out.")
+        else
+            Print("use /petxp rate on or /petxp rate off.")
+        end
+    elseif command == "session" then
+        if word == "reset" then
+            RestartSession()
+            Print("experience rate started over.")
+        elseif word == "" then
+            local perHour, toLevel = PetRate()
+            if perHour then
+                Print(("%s experience per hour, level in %s."):format(GroupedNumber(perHour), Duration(toLevel)))
+            else
+                Print(("still gathering: the rate shows after a minute with your pet out and some experience gained. %d gained so far.")
+                    :format(session.gained))
+            end
+        else
+            Print("use /petxp session, or /petxp session reset to start the rate over.")
+        end
+    elseif command == "happycolor" or command == "happycolour" then
+        if word == "on" or word == "off" then
+            SetHappyColor(word == "on")
+            Print(db.happyColor and "the bar is colored by your pet's happiness: green, yellow or red."
+                or "the bar keeps its own color.")
+        else
+            Print("use /petxp happycolor on or /petxp happycolor off.")
+        end
+    elseif command == "levelalert" or command == "alert" then
+        local part, state = word:match("^(%S+)%s+(%S+)$")
+        if word == "test" then
+            LevelUpAlert(true)
+        elseif part and ALERT_KEYS[part] and (state == "on" or state == "off") then
+            SetAlert(part, state == "on")
+            Print(("level-up %s %s."):format(part, state))
+        else
+            Print("use /petxp levelalert sound, flash or chat with on or off, or /petxp levelalert test.")
         end
     elseif command == "texture" then
         local texture = FindMedia(TextureChoices(), word)
@@ -1329,13 +1685,16 @@ ns.API = {
     -- The preview shows the real pet when one is out and reports its
     -- experience, and the sample pet of the Text menu's examples otherwise:
     -- level, experience, the most there is, loyalty, happiness and training
-    -- points.
+    -- points, then the mood as a number for the happiness colour.
     PreviewPet = function()
         if pet.present and pet.max > 0 then
-            return pet.level, pet.current, pet.max, PetLoyalty(), PetHappiness(), PetTrainingPoints()
+            return pet.level, pet.current, pet.max, PetLoyalty(), PetHappiness(), PetTrainingPoints(), PetMood()
         end
-        return 14, 1290, 2150, "Faithful", "Happy", 25
+        return 14, 1290, 2150, "Faithful", "Happy", 25, 3
     end,
+    HAPPINESS_TEXT = HAPPINESS_TEXT,
+    FlashFrame = FlashFrame,
+    TestAlert = function() LevelUpAlert(true) end,
 
     SetLocked = SetLocked,
     SetShowTooltip = SetShowTooltip,
@@ -1354,6 +1713,10 @@ ns.API = {
     SetTextLoyalty = SetTextLoyalty,
     SetTextHappiness = SetTextHappiness,
     SetTextTraining = SetTextTraining,
+    SetTooltipRate = SetTooltipRate,
+    RestartSession = RestartSession,
+    SetHappyColor = SetHappyColor,
+    SetAlert = SetAlert,
     SetFontPath = SetFontPath,
     SetFontSize = SetFontSize,
     SetOutline = SetOutline,
@@ -1383,7 +1746,10 @@ ns.API = {
 -- What can change the bar. UNIT_PET_EXPERIENCE is the real signal;
 -- PLAYER_XP_UPDATE backs it up, since a pet's experience comes from the same
 -- kills. UNIT_HAPPINESS and UNIT_PET_TRAINING_POINTS keep happiness, loyalty
--- and training points current, on the bar and in an open tooltip. Each is
+-- and training points current, on the bar, in its happiness colour and in an
+-- open tooltip. UNIT_PET and UNIT_LEVEL tell a summon or a swap from a level
+-- up, through FollowPet. UNIT_HEALTH is read only for the pet dying or
+-- coming back. Each is
 -- registered through pcall: registering an event the client does not have
 -- raises an error, and one missing event must not stop the rest.
 local PET_EVENTS = {
@@ -1395,6 +1761,7 @@ local PET_EVENTS = {
     "PLAYER_ENTERING_WORLD",
     "UNIT_HAPPINESS",
     "UNIT_PET_TRAINING_POINTS",
+    "UNIT_HEALTH",
 }
 
 local events = CreateFrame("Frame")
@@ -1434,6 +1801,13 @@ events:SetScript("OnEvent", function(self, event, unit)
 
     unit = SafeValue(unit)
     if event == "UNIT_PET" and unit ~= "player" then return end
-    if (event == "UNIT_LEVEL" or event == "UNIT_HAPPINESS") and unit ~= "pet" then return end
+    if (event == "UNIT_LEVEL" or event == "UNIT_HAPPINESS" or event == "UNIT_HEALTH") and unit ~= "pet" then
+        return
+    end
+    -- Health changes all through a fight; only a death or a revival matters.
+    if event == "UNIT_HEALTH" then
+        local dead = type(UnitIsDead) == "function" and SafeValue(UnitIsDead("pet")) == true
+        if dead == pet.dead then return end
+    end
     Refresh()
 end)

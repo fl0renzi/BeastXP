@@ -1,5 +1,14 @@
 # BeastXP
 
+## 1.4.0
+
+- The tooltip now shows your pet's experience per hour and the time to its next level. They count only while your pet is out and start over at each login and for a different pet. For the first minute the tooltip says it is gathering. Turn them off with *Experience rate in tooltip* in the right-click menu, on the settings page or with `/petxp rate off`. Start them over with *Reset session* or `/petxp session reset`, and see them in chat with `/petxp session`.
+- A level-up alert: when your pet gains a level, the game's level up sound plays, the bar flashes, and a line in chat says, for example, "Grimtooth reached level 15. You have 5 training points to spend." Turn each part off under *Level-up alert* in the right-click menu, on the settings page, or with `/petxp levelalert sound off`, `flash off` or `chat off`. *Test alert*, or `/petxp levelalert test`, plays it. Summoning, swapping or logging in never raises one.
+- New *Color by happiness* option: the bar turns green while your pet is happy, yellow while it is content and red while it is unhappy. It is off until you tick it under *Bar color* in the right-click menu, on the settings page, or with `/petxp happycolor on`. The settings page's *Preview mood* shows each color on the preview.
+- The settings page has two new sections, *Tooltip and session* and *Alerts and colors*.
+- While your pet is dead the bar says "Pet dead", and the tooltip says so too. The experience rate's clock stops until it is back.
+- An unlocked bar with no pet out now says "No pet" even with the *No text* style, so it never sits there empty.
+
 ## 1.3.0
 
 - The tooltip now shows your pet's happiness, in the words the game's pet panel uses: Happy, Content or Unhappy.

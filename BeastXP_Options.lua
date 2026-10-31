@@ -60,6 +60,7 @@ local content         -- the scrolling part of the page, under the header
 local categoryID      -- what Settings.OpenToCategory takes
 local combatWaiter    -- opens the page once combat ends
 local controls = {}   -- what RefreshPage keeps in step with the settings
+local previewMood     -- the mood the preview shows, 1 to 3; nil for the pet's own
 local refreshing = false -- true while RefreshPage sets controls, so they do not call back
 
 --------------------------------------------------------------------------------
@@ -213,10 +214,17 @@ end
 local function UpdatePreview()
     local db, preview = API.GetDB(), controls.preview
     preview:SetSize(math.min(db.width, PREVIEW_MAX_WIDTH), math.min(db.height, PREVIEW_MAX_HEIGHT))
+
+    -- The Preview mood dropdown shows the bar in another mood, colour and
+    -- text alike.
+    local level, current, max, loyalty, happiness, points, mood = API.PreviewPet()
+    if previewMood then
+        mood, happiness = previewMood, API.HAPPINESS_TEXT[previewMood]
+    end
+    preview.mood = mood
     API.ApplyTexture(preview)
     API.ApplyFont(preview)
 
-    local level, current, max, loyalty, happiness, points = API.PreviewPet()
     preview.status:SetMinMaxValues(0, max > 0 and max or 1)
     preview.status:SetValue(math.min(current, max))
     preview.text:SetText(API.FormatText(db.textStyle, true, level, current, max,
@@ -232,6 +240,11 @@ local function RefreshPage()
     controls.textLoyalty:SetChecked(db.textLoyalty)
     controls.textHappiness:SetChecked(db.textHappiness)
     controls.textTraining:SetChecked(db.textTraining)
+    controls.tooltipRate:SetChecked(db.tooltipRate)
+    controls.happyColor:SetChecked(db.happyColor)
+    controls.alertSound:SetChecked(db.alertSound)
+    controls.alertFlash:SetChecked(db.alertFlash)
+    controls.alertChat:SetChecked(db.alertChat)
     controls.width:SetValue(db.width)
     controls.height:SetValue(db.height)
     SetBoxValue(controls.widthBox, db.width)
@@ -406,6 +419,57 @@ local function BuildTextSection()
     end)
 end
 
+local function Button(row, text, width, onClick)
+    local button = CreateFrame("Button", nil, row, "UIPanelButtonTemplate")
+    button:SetPoint("LEFT", row, "CENTER", CONTROL_X, 0)
+    button:SetSize(width, 22)
+    button:SetText(text)
+    button:SetScript("OnClick", onClick)
+    return button
+end
+
+local function BuildTooltipSection()
+    Section("Tooltip and session")
+
+    controls.tooltipRate = Checkbox(Row("Experience rate"), API.SetTooltipRate)
+    Tooltip(controls.tooltipRate, "Adds your pet's experience per hour and the time to its next level to the tooltip. They show after a minute with your pet out and some experience gained, and count only while your pet is out.")
+
+    local reset = Button(Row("Session"), "Reset session", 160, function() API.RestartSession() end)
+    Tooltip(reset, "Starts the experience rate over. It also starts over at each login and for a different pet.")
+end
+
+local function BuildAlertSection()
+    Section("Alerts and colors")
+
+    controls.happyColor = Checkbox(Row("Color by happiness"), API.SetHappyColor)
+    Tooltip(controls.happyColor, "Colors the bar green while your pet is happy, yellow while it is content and red while it is unhappy, in place of the bar color.")
+
+    -- Only the preview changes, to show each mood's colour.
+    Dropdown(Row("Preview mood"), DROPDOWN_WIDTH, function(_, root)
+        root:CreateRadio("Your pet's",
+            function() return previewMood == nil end,
+            function() previewMood = nil; UpdatePreview() end)
+        for mood = 3, 1, -1 do
+            root:CreateRadio(API.HAPPINESS_TEXT[mood],
+                function() return previewMood == mood end,
+                function() previewMood = mood; UpdatePreview() end)
+        end
+    end)
+
+    controls.alertSound = Checkbox(Row("Level-up sound"), function(on) API.SetAlert("sound", on) end)
+    Tooltip(controls.alertSound, "Plays the game's level up sound when your pet gains a level.")
+    controls.alertFlash = Checkbox(Row("Level-up flash"), function(on) API.SetAlert("flash", on) end)
+    Tooltip(controls.alertFlash, "Flashes the bar when your pet gains a level.")
+    controls.alertChat = Checkbox(Row("Level-up message"), function(on) API.SetAlert("chat", on) end)
+    Tooltip(controls.alertChat, "Says in chat when your pet gains a level, and how many training points it has to spend.")
+
+    local test = Button(Row("Alert"), "Test alert", 160, function()
+        API.TestAlert()
+        if API.GetDB().alertFlash then API.FlashFrame(controls.preview) end
+    end)
+    Tooltip(test, "Plays the level-up alert the way it is set up, on the bar and on the preview.")
+end
+
 local function BuildPage()
     page = CreateFrame("Frame")
     page:Hide()
@@ -437,6 +501,8 @@ local function BuildPage()
 
     BuildBarSection()
     BuildTextSection()
+    BuildTooltipSection()
+    BuildAlertSection()
     content:SetSize(scroll:GetWidth(), -nextY)
 
     page:SetScript("OnShow", function()

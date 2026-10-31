@@ -124,6 +124,13 @@ function __reset_timers()
     __now = 0
 end
 
+-- The game's clock, the same one C_Timer runs on.
+function GetTime() return __now end
+
+-- The sounds played, by kit ID, in order.
+__sounds = {}
+function PlaySound(kit) __sounds[#__sounds + 1] = kit end
+
 -- The toc's Version line. The repository's toc holds the packager's
 -- placeholder; a test names a release to see it shown.
 __version = "@project-version@"
@@ -154,6 +161,18 @@ end
 function UnitLevel(unit)
     if unit == "pet" and __pet then return __pet.level end
     return 0
+end
+
+-- A pet that is out but dead carries dead = true.
+function UnitIsDead(unit)
+    if unit == "pet" and __pet then return __pet.dead == true end
+    return false
+end
+
+-- A pet's GUID, when the test gives it one; otherwise the client reports none
+-- and the addon tells pets apart by name.
+function UnitGUID(unit)
+    if unit == "pet" and __pet then return __pet.guid end
 end
 
 function UnitName(unit)
@@ -301,6 +320,9 @@ function methods:SetTexture(texture)
 end
 function methods:SetColorTexture(...) self.__color = { ... } end
 function methods:SetAtlas(atlas) self.__atlas = atlas; return true end
+function methods:SetBlendMode(mode) self.__blend = mode end
+function methods:SetAlpha(alpha) self.__alpha = alpha end
+function methods:GetAlpha() return self.__alpha or 1 end
 
 -- CheckButton
 function methods:SetChecked(checked) self.__checked = checked and true or false end
@@ -764,7 +786,7 @@ local DEFAULT_EVENTS = {
     "PLAYER_LOGIN", "UNIT_PET", "UNIT_PET_EXPERIENCE", "UNIT_LEVEL",
     "PET_UI_UPDATE", "PLAYER_XP_UPDATE", "PLAYER_ENTERING_WORLD", "PLAYER_REGEN_ENABLED",
     "PLAYER_REGEN_DISABLED",
-    "UNIT_HAPPINESS", "UNIT_PET_TRAINING_POINTS",
+    "UNIT_HAPPINESS", "UNIT_PET_TRAINING_POINTS", "UNIT_HEALTH",
 }
 
 -- LibSharedMedia as another addon loads it: LibStub, and the part of the
@@ -813,6 +835,7 @@ function __boot(options)
     resetGlobals()
 
     __output = {}
+    __sounds = {}
     __interface = options.interface or 16001
     __version = options.version or "@project-version@"
     __class = options.class or "HUNTER"
