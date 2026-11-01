@@ -89,8 +89,10 @@ The bar starts **unlocked** on a fresh install, so you can put it where you want
   install.
 - **Fade**: tick *Fade out of combat* in the right-click menu and the bar fades to the faded opacity
   (40% for a fresh install, set on the settings page or with `/petxp fade <percent>`) while you are
-  out of combat. It comes back to full in combat, under the mouse, while an alert flashes and in
-  Edit Mode. It is off for a fresh install.
+  out of combat. It comes back to full in combat, under the mouse, while it is dragged or resized,
+  while an alert flashes and in Edit Mode. It is off for a fresh install. The faded opacity and
+  *Reset session* are on the settings page and in the slash commands, not in the right-click menu,
+  like the width, height and position.
 - **Edit Mode**: open the game's own *Edit Mode* (Esc menu) and the bar joins in: it shows even
   without a pet, lit up in Edit Mode's blue with its name and its X and Y above it, and can be
   dragged and resized even while locked. The X and Y follow the bar as you drag. Hover the bar and
@@ -162,17 +164,22 @@ Install it from CurseForge, or copy `BeastXP.toc`, `BeastXP.lua` and `BeastXP_Op
 - Event-driven: the bar refreshes on `UNIT_PET`, `UNIT_PET_EXPERIENCE`, `UNIT_LEVEL`,
   `PET_UI_UPDATE`, `PLAYER_XP_UPDATE` and `PLAYER_ENTERING_WORLD`, never from `OnUpdate`. The two
   exceptions are a drag in Edit Mode, where the X and Y follow the bar until it is let go, and the
-  one-second level up flash.
-- Pets are told apart by `UnitGUID("pet")` where the client gives one, and by name otherwise. Each
-  reading is compared with the last, so a summon or a swap is never taken for a level up, and the
-  experience gained across a level boundary counts whichever the game reports first, the level or
-  the experience. The level up chat line waits half a second for the training points.
-- `UNIT_HEALTH` for the pet is read only to notice it dying or coming back; any other health change
-  is ignored without a refresh. A dead pet the client no longer counts as out shows as `No pet`.
+  one-second alert flash.
+- `UNIT_HAPPINESS` and `UNIT_PET_TRAINING_POINTS` keep loyalty, happiness and training points
+  current, on the bar and in an open tooltip.
+- Each reading of the pet is compared with the last, so a summon or a swap is never taken for a
+  level up, and the experience gained across a level boundary counts whichever the game reports
+  first, the level or the experience. While a pet stays out, a swap is told by `UnitGUID("pet")`
+  where the client gives one. The rate belongs to the pet's name, so a pet that comes back from a
+  dismissal keeps it even if the client gives it a new GUID. Without a GUID, a pet the game says has
+  changed is not compared with the last reading, so a swap to a pet with the same name raises no
+  alert. The level up chat line waits half a second for the training points, and is left out if
+  the pet is dismissed or swapped meanwhile.
+- `UNIT_HEALTH` is asked for the pet alone where the client allows it, and read only to notice the
+  pet dying or coming back; any other health change is ignored without a refresh. A dead pet the
+  client no longer counts as out shows as `No pet`.
 - `PLAYER_REGEN_DISABLED` and `PLAYER_REGEN_ENABLED` are registered only while *Fade out of combat*
   is on, and only fade the bar.
-  `UNIT_HAPPINESS` and `UNIT_PET_TRAINING_POINTS` keep loyalty, happiness and training points
-  current, on the bar and in an open tooltip.
 - A font file another addon ships loads in the background the first time the bar asks for it,
   usually when the pet first shows up after login. Until it is in, the bar's text uses Friz
   Quadrata; the game then switches to the file by itself but does not always draw the text again.

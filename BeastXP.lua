@@ -8,8 +8,8 @@
 --
 -- Cost: the bar is built the first time there is something to show, and it is
 -- refreshed from the pet events only, never from OnUpdate; only the second-long
--- level up flash runs on one, while it plays. A character that is
--- not a hunter unregisters everything at login and pays nothing after that.
+-- alert flash runs on one, while it plays. A character that is not a hunter
+-- unregisters everything at login and pays nothing after that.
 
 local addonName, ns = ...
 
@@ -100,7 +100,8 @@ local ALERT_DELAY = 0.5
 local ALERT_COOLDOWN = 2
 
 -- The sound the game plays for the player's own level up, and the softer one
--- it plays for a whisper, for the feed reminder.
+-- it plays for a whisper, for the feed reminder. Sound kit IDs, played by
+-- number: SOUNDKIT's names for them differ between clients.
 local LEVEL_UP_SOUND = 888
 local FEED_SOUND = 3081
 
@@ -228,8 +229,10 @@ local pet = { present = false, current = 0, max = 0, level = nil, dead = false }
 -- The last reading of the pet that is out, kept so the next one can tell the
 -- same pet gaining experience or a level from another pet being summoned. All
 -- nil while no pet is out, so the first reading after a summon, a swap or a
--- login only sets the baseline.
-local seen = { id = nil, level = nil, current = nil, max = nil, mood = nil }
+-- login only sets the baseline. Holds guid, name, level, current, max and mood;
+-- stale, the old level's experience still read after a level up; and unsure,
+-- set when the game says the pet changed and it is known by name alone.
+local seen = {}
 
 -- This login's experience for the tooltip's rate: which pet it is for, the
 -- experience gained, and how long that pet has been out. Kept in memory only.
@@ -471,17 +474,26 @@ end
 --------------------------------------------------------------------------------
 
 local function Now()
-    return type(GetTime) == "function" and GetTime() or 0
+    local now = type(GetTime) == "function" and SafeValue(GetTime()) or nil
+    return type(now) == "number" and now or 0
 end
 
--- Which pet is out: its GUID where the client gives one, its name otherwise.
+-- Which pet is out: its GUID where the client gives one, and its name. Both
 -- nil when neither can be read, and the pet is then not followed.
 local function PetIdentity()
     local guid = type(UnitGUID) == "function" and SafeValue(UnitGUID("pet")) or nil
-    if type(guid) == "string" and guid ~= "" then return guid end
+    if not (type(guid) == "string" and guid ~= "") then guid = nil end
     local name = SafeValue(UnitName("pet"))
-    if type(name) == "string" and name ~= "" then return name end
-    return nil
+    if not (type(name) == "string" and name ~= "") then name = nil end
+    return guid, name
+end
+
+-- Two readings are the same pet when their GUIDs match. When either has no
+-- GUID, which a client may give only some of the time, they are compared by
+-- name.
+local function SamePet(guid, name, otherGuid, otherName)
+    if guid and otherGuid then return guid == otherGuid end
+    return name ~= nil and name == otherName
 end
 
 local function SessionTime()
@@ -499,57 +511,87 @@ local function ResetSession()
     StartSession(session.since and session.id or nil)
 end
 
+local function ForgetPet()
+    seen.guid, seen.name, seen.level, seen.current, seen.max = nil, nil, nil, nil, nil
+    seen.stale, seen.mood, seen.unsure = nil, nil, nil
+end
+
 -- Compares the reading ReadPet just took with the last one. Counts the
 -- experience the same pet gained, across a level boundary too, and returns
 -- true when that pet went up a level. A drop, a lower level or a different
 -- pet counts nothing. Returns second the mood the same pet just dropped to,
 -- when it did. A mood the client does not report keeps the last one.
+--
+-- The session belongs to the pet's name, since a pet may come back from a
+-- dismissal under a new GUID; the GUID only tells a swap made while a pet is
+-- out from a level up.
 local function FollowPet()
     -- A dead pet is away: the clock stops, and its revival sets a baseline.
-    local id = pet.present and not pet.dead and pet.level and PetIdentity() or nil
-    if not id then
+    local guid, name
+    if pet.present and not pet.dead and pet.level then guid, name = PetIdentity() end
+    if not (guid or name) then
         if session.since then
             session.elapsed = session.elapsed + (Now() - session.since)
             session.since = nil
         end
-        seen.id, seen.level, seen.current, seen.max, seen.mood = nil, nil, nil, nil, nil
+        ForgetPet()
         return false, nil
     end
 
-    local mood, hungrier = PetMood(), nil
-    if seen.id == id and mood and seen.mood and mood < seen.mood then hungrier = mood end
-    if mood or seen.id ~= id then seen.mood = mood end
-
-    if id ~= session.id or (seen.id == id and pet.level < seen.level) then
+    local known = seen.level ~= nil
+    local same = known and SamePet(guid, name, seen.guid, seen.name)
+    -- After UNIT_PET, a pet known only by its name is compared with nothing.
+    local follow = same and not seen.unsure
+    local id = name or guid
+    if (known and not same) or id ~= session.id
+        or (same and pet.level ~= seen.level and (seen.unsure or pet.level < seen.level)) then
         StartSession(id)
     elseif not session.since then
         session.since = Now()
     end
 
+    local mood, hungrier = PetMood(), nil
+    if follow and mood and seen.mood and mood < seen.mood then hungrier = mood end
+    if mood or not follow then seen.mood = mood end
+
+    -- Experience the client cannot report, or a pet at the level cap, gives
+    -- nothing to count from: the reading is kept as unknown, and the next
+    -- known one sets the baseline.
+    local current, max = pet.current, pet.max
+    if not (max > 0) then current, max = nil, nil end
+
     -- The game may report the new level and the new experience in separate
-    -- events, in either order. Experience that drops on the same level is the
-    -- new level's arriving first: the old reading is kept until the level
-    -- follows. A level whose experience still reads as the old level's counts
-    -- the rest of the old level only, and the next reading counts from 0.
-    local leveled = false
-    local current = pet.current
-    if seen.id == id then
+    -- events, in either order. Experience that drops, or a level's size that
+    -- changes, on the same level is the new level's arriving first: the old
+    -- reading is kept until the level follows. A level whose experience still
+    -- reads as the old level's counts the rest of the old level only. That
+    -- stale reading is then passed over until the new level's own arrives,
+    -- which counts in full.
+    local leveled, stale = false, nil
+    if follow then
         if pet.level > seen.level then
             leveled = true
-            if seen.max > 0 then
+            if seen.max then
                 session.gained = session.gained + (seen.max - seen.current)
             end
-            if pet.max == seen.max then
-                current = 0
-            else
-                session.gained = session.gained + pet.current
+            if max and max == seen.max then
+                stale, current = current, 0
+            elseif current and seen.max then
+                session.gained = session.gained + current
             end
         elseif pet.level == seen.level then
-            if pet.current < seen.current then return false, hungrier end
-            session.gained = session.gained + (pet.current - seen.current)
+            if not current then return false, hungrier end
+            if seen.stale then
+                if current == seen.stale and max == seen.max then return false, hungrier end
+                session.gained = session.gained + current
+            elseif seen.current then
+                if current < seen.current or max ~= seen.max then return false, hungrier end
+                session.gained = session.gained + (current - seen.current)
+            end
         end
     end
-    seen.id, seen.level, seen.current, seen.max = id, pet.level, current, pet.max
+    seen.guid, seen.name, seen.level, seen.current, seen.max = guid, name, pet.level, current, max
+    seen.stale, seen.unsure = stale, nil
     return leveled, hungrier
 end
 
@@ -787,6 +829,12 @@ local function FlashFrame(frame, color)
     if frame.OnFlashDone then frame.OnFlashDone() end
 end
 
+-- Ends a flash at once. Hiding the flasher fades the bar back, if it fades.
+local function StopFlash(frame)
+    frame.flash:SetAlpha(0)
+    frame.flasher:Hide()
+end
+
 -- SetFont returns false when the file cannot be loaded. The chosen font falls
 -- back to the default one, and that to the game's own font object, so the
 -- string always has a font: SetText errors on a font string without one.
@@ -884,26 +932,8 @@ local function ApplyLock()
     end
 end
 
--- Ends a drag or a resize and remembers where the bar ended up. Also runs on
--- hide, since a bar hidden mid-drag would otherwise stay stuck to the cursor.
-local function StopMoving()
-    if not moving then return end
-    moving = false
-    bar:StopMovingOrSizing()
-    bar.highlight:SetScript("OnUpdate", nil)
-    SaveLayout()
-end
-
--- Starts a drag or a resize. In Edit Mode the X and Y follow the bar every
--- frame until it is let go, since the saved position only changes then.
-local function StartMoving(resize)
-    moving = true
-    if resize then bar:StartSizing("BOTTOMRIGHT") else bar:StartMoving() end
-    if editing then bar.highlight:SetScript("OnUpdate", UpdateReadout) end
-end
-
 -- With Fade out of combat on, the bar sits at the faded opacity, and comes up
--- to full in combat, under the mouse (so while it is dragged too), while a
+-- to full in combat, under the mouse, while it is dragged or resized, while a
 -- flash plays and while Edit Mode is open, so it is never faded where it
 -- matters.
 local inCombat = false
@@ -912,13 +942,33 @@ local WatchCombat -- defined with the events, below
 
 local function ApplyFade()
     if not bar then return end
-    local full = not db.fadeOutOfCombat or inCombat or hovered or editing
+    local full = not db.fadeOutOfCombat or inCombat or hovered or moving or editing
         or bar.flasher:IsShown()
     bar:SetAlpha(full and 1 or db.fadeOpacity / 100)
 end
 
 local function SetHovered(over)
     hovered = over
+    ApplyFade()
+end
+
+-- Ends a drag or a resize and remembers where the bar ended up. Also runs on
+-- hide, since a bar hidden mid-drag would otherwise stay stuck to the cursor.
+local function StopMoving()
+    if not moving then return end
+    moving = false
+    bar:StopMovingOrSizing()
+    bar.highlight:SetScript("OnUpdate", nil)
+    SaveLayout()
+    ApplyFade()
+end
+
+-- Starts a drag or a resize. In Edit Mode the X and Y follow the bar every
+-- frame until it is let go, since the saved position only changes then.
+local function StartMoving(resize)
+    moving = true
+    if resize then bar:StartSizing("BOTTOMRIGHT") else bar:StartMoving() end
+    if editing then bar.highlight:SetScript("OnUpdate", UpdateReadout) end
     ApplyFade()
 end
 
@@ -1003,7 +1053,14 @@ local function EnsureBar()
         StartMoving(false)
     end)
     bar:SetScript("OnDragStop", StopMoving)
-    bar:SetScript("OnHide", StopMoving)
+    -- A bar hidden under the mouse may never hear the mouse leave, and a
+    -- flash cut off by the hide would play on from where it stopped at the
+    -- next summon. Both are dropped, so the bar comes back as it should.
+    bar:SetScript("OnHide", function()
+        StopMoving()
+        hovered = false
+        StopFlash(bar)
+    end)
     bar:SetScript("OnMouseUp", function(self, button)
         if button == "RightButton" then ShowMenu(self) end
     end)
@@ -1076,13 +1133,18 @@ local function PlayAlert(kind, test, sound, color)
 end
 
 local function LevelUpAlert(test)
-    if not PlayAlert("level", test, SOUNDKIT and SOUNDKIT.LEVEL_UP or LEVEL_UP_SOUND) then return end
+    if not PlayAlert("level", test, LEVEL_UP_SOUND) then return end
     if not db.alertChat then return end
 
     local name = PetNameOr("Your pet")
-    local level = pet.level or 14
-    if test then level = level + 1 end
+    local guid = pet.present and PetIdentity() or nil
     local function Say()
+        -- Read when the line is printed, for the pet that leveled: one
+        -- dismissed or swapped meanwhile gets no line, and a second level
+        -- inside the cooldown is named in this one.
+        if not test and (not pet.present or PetNameOr(nil) ~= name or (PetIdentity()) ~= guid) then return end
+        local level = pet.level or 14
+        if test then level = level + 1 end
         local points = pet.present and PetTrainingPoints() or (test and 5) or nil
         Print(LevelUpText(name, level, points))
     end
@@ -1100,7 +1162,7 @@ end
 -- mood is the one the pet dropped to; a test names TestMood's.
 local function FeedAlert(mood, test)
     if test then mood = TestMood() end
-    if not PlayAlert("feed", test, SOUNDKIT and SOUNDKIT.TELL_MESSAGE or FEED_SOUND, HAPPINESS_COLORS[mood]) then
+    if not PlayAlert("feed", test, FEED_SOUND, HAPPINESS_COLORS[mood]) then
         return
     end
     if db.feedChat then Print(FeedText(PetNameOr("Your pet"), mood)) end
@@ -1912,10 +1974,9 @@ ns.API = {
 -- kills. UNIT_HAPPINESS and UNIT_PET_TRAINING_POINTS keep happiness, loyalty
 -- and training points current, on the bar, in its happiness colour and in an
 -- open tooltip. UNIT_PET and UNIT_LEVEL tell a summon or a swap from a level
--- up, through FollowPet. UNIT_HEALTH is read only for the pet dying or
--- coming back. Each is
--- registered through pcall: registering an event the client does not have
--- raises an error, and one missing event must not stop the rest.
+-- up, through FollowPet. Each is registered through pcall: registering an
+-- event the client does not have raises an error, and one missing event must
+-- not stop the rest.
 local PET_EVENTS = {
     "UNIT_PET",
     "UNIT_PET_EXPERIENCE",
@@ -1925,8 +1986,17 @@ local PET_EVENTS = {
     "PLAYER_ENTERING_WORLD",
     "UNIT_HAPPINESS",
     "UNIT_PET_TRAINING_POINTS",
-    "UNIT_HEALTH",
 }
+
+-- UNIT_HEALTH is read only for the pet dying or coming back. It fires for
+-- every unit in sight all through a fight, so it is asked for the pet alone
+-- where the client can filter by unit.
+local function WatchPetHealth(frame)
+    if frame.RegisterUnitEvent and pcall(frame.RegisterUnitEvent, frame, "UNIT_HEALTH", "pet") then
+        return
+    end
+    pcall(frame.RegisterEvent, frame, "UNIT_HEALTH")
+end
 
 local events = CreateFrame("Frame")
 events:RegisterEvent("PLAYER_LOGIN")
@@ -1962,6 +2032,7 @@ events:SetScript("OnEvent", function(self, event, unit)
         for _, name in ipairs(PET_EVENTS) do
             pcall(self.RegisterEvent, self, name)
         end
+        WatchPetHealth(self)
         WatchCombat()
         -- The game's Edit Mode says when it opens and closes through the
         -- EventRegistry, which calls back through securecallfunction, so the
@@ -1991,5 +2062,9 @@ events:SetScript("OnEvent", function(self, event, unit)
         local dead = type(UnitIsDead) == "function" and SafeValue(UnitIsDead("pet")) == true
         if dead == pet.dead then return end
     end
+    -- The game says the pet changed. A pet known only by its name may now be
+    -- another with the same name, so its next reading is not compared with
+    -- the last one.
+    if event == "UNIT_PET" and seen.level and not seen.guid then seen.unsure = true end
     Refresh()
 end)

@@ -1570,6 +1570,61 @@ test("a summon, a swap, a resummon or a login never raise a level up alert", fun
     assert_eq(#__sounds, 0, "a same-named pet swap read as a level up")
 end)
 
+test("without a GUID, a swap to a pet with the same name is not a level up", function()
+    __boot({ pet = hunterPet({ level = 20 }) })
+    __pet = hunterPet({ level = 25 })
+    __fire("UNIT_PET", "player")
+    __advance(1)
+    assert_eq(#__sounds, 0, "a same-named swap read as a level up")
+    assert_false(__printed("reached level"), "a chat line for the swap")
+
+    -- The new pet's own level up is still heard.
+    __advance(3)
+    __pet.level = 26
+    __fire("UNIT_LEVEL", "pet")
+    assert_eq(#__sounds, 1, "the swapped-in pet's level up was missed")
+end)
+
+test("a GUID the client gives only some of the time does not split the pet in two", function()
+    __boot({ pet = hunterPet({ guid = "Pet-1" }) })
+    __pet.guid = nil
+    __pet.current = 500
+    __fire("UNIT_PET_EXPERIENCE", "pet")
+    __pet.guid, __pet.level = "Pet-1", 15
+    __fire("UNIT_LEVEL", "pet")
+    assert_eq(#__sounds, 1, "a level up lost when the GUID came and went")
+end)
+
+test("the level up chat line is for the pet that leveled, at the level it reached", function()
+    -- Dismissed before the line is printed: no line.
+    __boot({ pet = hunterPet() })
+    __pet.level = 15
+    __fire("UNIT_LEVEL", "pet")
+    __pet = nil
+    __fire("UNIT_PET", "player")
+    __advance(1)
+    assert_false(__printed("reached level"), "a line for a pet that is gone")
+
+    -- Swapped for another: no line naming the new pet's points.
+    __boot({ pet = hunterPet() })
+    __pet.level = 15
+    __fire("UNIT_LEVEL", "pet")
+    __pet = hunterPet({ name = "Claw" })
+    __fire("UNIT_PET", "player")
+    __advance(1)
+    assert_false(__printed("reached level"), "a line after a swap")
+
+    -- Two levels inside the cooldown: one line, naming the second.
+    __boot({ pet = hunterPet() })
+    __pet.level = 15
+    __fire("UNIT_LEVEL", "pet")
+    __pet.level = 16
+    __fire("UNIT_LEVEL", "pet")
+    __advance(1)
+    assert_true(__printed("Grimtooth reached level 16."), "the second level was not named")
+    assert_false(__printed("reached level 15"), "a stale level named")
+end)
+
 test("level up events close together raise one alert", function()
     __boot({ pet = hunterPet() })
     __pet.level = 15
@@ -1680,13 +1735,6 @@ test("a summon, a swap, a login, a revival or an unknown mood never raise a feed
     __pet = hunterPet({ name = "Fang", happiness = 1 })
     __fire("UNIT_PET", "player")
 
-    -- A mood the client does not report keeps the last one, so the next
-    -- known one is compared with that.
-    __pet.happiness = __secret()
-    __fire("UNIT_HAPPINESS", "pet")
-    __pet.happiness = 1
-    __fire("UNIT_HAPPINESS", "pet")
-
     -- Dying and coming back unhappy.
     __pet.happiness = 3
     __fire("UNIT_HAPPINESS", "pet")
@@ -1697,6 +1745,22 @@ test("a summon, a swap, a login, a revival or an unknown mood never raise a feed
 
     assert_eq(#__sounds, 0, "a reminder without a drop")
     assert_false(__printed("is now"), "a chat line without a drop")
+end)
+
+test("a mood the client does not report keeps the last one, so a drop across it still reminds", function()
+    __boot({ pet = hunterPet({ happiness = 3 }) })
+    __pet.happiness = __secret()
+    __fire("UNIT_HAPPINESS", "pet")
+    assert_eq(#__sounds, 0, "a reminder for an unknown mood")
+    __pet.happiness = 2
+    __fire("UNIT_HAPPINESS", "pet")
+    assert_eq(#__sounds, 1, "the unknown mood replaced the last one")
+
+    -- A summon with an unknown mood, then a known one: only a baseline.
+    __boot({ pet = hunterPet({ happiness = __secret() }) })
+    __pet.happiness = 1
+    __fire("UNIT_HAPPINESS", "pet")
+    assert_eq(#__sounds, 0, "the first known mood after a summon was taken for a drop")
 end)
 
 test("each part of the feed reminder turns off, and tests come from the menu, the page and the command", function()
@@ -1810,6 +1874,46 @@ test("a login in combat starts unfaded, and the settings page sets the fade", fu
     assert_false(__registered("PLAYER_REGEN_DISABLED"), "Defaults left combat watched")
 end)
 
+test("a bar hidden under the mouse or mid-flash comes back faded, with no flash", function()
+    __boot({ pet = hunterPet(), db = { locked = true, fadeOutOfCombat = true } })
+    __script(BeastXPBar, "OnEnter")
+    __pet.level = 15
+    __fire("UNIT_LEVEL", "pet")
+    __script(BeastXPBar.flasher, "OnUpdate", 0.2)
+    -- Dismissed with the mouse on it, mid-flash; the bar hides and hears no
+    -- OnLeave.
+    __pet = nil
+    __fire("UNIT_PET", "player")
+    assert_false(BeastXPBar:IsShown(), "a locked bar shown with no pet")
+    __pet = hunterPet({ level = 15 })
+    __fire("UNIT_PET", "player")
+    assert_false(BeastXPBar.flasher:IsShown(), "the old flash played on at the summon")
+    assert_eq(BeastXPBar.flash:GetAlpha(), 0)
+    assert_eq(BeastXPBar:GetAlpha(), 0.4, "the bar came back unfaded")
+end)
+
+test("a bar being dragged or resized is not faded", function()
+    __boot({ pet = hunterPet(), db = { fadeOutOfCombat = true } })
+    assert_eq(BeastXPBar:GetAlpha(), 0.4)
+    __script(BeastXPBar, "OnDragStart")
+    assert_eq(BeastXPBar:GetAlpha(), 1, "faded while dragged")
+    __script(BeastXPBar, "OnDragStop")
+    assert_eq(BeastXPBar:GetAlpha(), 0.4, "not faded after the drag")
+    __script(BeastXPBar.grip, "OnMouseDown", "LeftButton")
+    assert_eq(BeastXPBar:GetAlpha(), 1, "faded while resized")
+    __script(BeastXPBar.grip, "OnMouseUp", "LeftButton")
+    assert_eq(BeastXPBar:GetAlpha(), 0.4)
+end)
+
+test("UNIT_HEALTH is asked for the pet alone", function()
+    __boot({ pet = hunterPet() })
+    local units = __registeredUnits("UNIT_HEALTH")
+    assert_true(units and units.pet, "UNIT_HEALTH registered for every unit")
+    __pet.dead = true
+    __fire("UNIT_HEALTH", "pet")
+    assert_eq(BeastXPBar.text:GetText(), "Pet dead", "the pet's own health no longer heard")
+end)
+
 --------------------------------------------------------------------------------
 -- Experience rate
 --------------------------------------------------------------------------------
@@ -1863,6 +1967,68 @@ test("a level up counts the same whichever the game reports first, the level or 
     __fire("UNIT_LEVEL", "pet")
     assert_true(has_line(tooltip(), "Per hour | 15,000"), "experience first: not 250 gained")
     assert_eq(#__sounds, 1, "one alert for the level")
+end)
+
+test("the old level's experience read again after the level up is not counted twice", function()
+    __boot({ pet = hunterPet({ current = 2000 }) })
+    __advance(60)
+    __pet.level = 15
+    __fire("UNIT_LEVEL", "pet")
+    -- Other events read the stale 2000 / 2150 again before the new
+    -- experience arrives.
+    __fire("UNIT_PET_TRAINING_POINTS", "pet")
+    __fire("PLAYER_XP_UPDATE")
+    __pet.current, __pet.max = 100, 2500
+    __fire("UNIT_PET_EXPERIENCE", "pet")
+    assert_true(has_line(tooltip(), "Per hour | 15,000"), "the stale reading counted again")
+end)
+
+test("an experience-first level up with more experience than before still counts in full", function()
+    -- 100 / 1000, then 150 / 1100 on the new level before the level arrives:
+    -- 900 to finish the old level and 150 into the new.
+    __boot({ pet = hunterPet({ current = 100, max = 1000 }) })
+    __advance(60)
+    __pet.current, __pet.max = 150, 1100
+    __fire("UNIT_PET_EXPERIENCE", "pet")
+    __pet.level = 15
+    __fire("UNIT_LEVEL", "pet")
+    assert_true(has_line(tooltip(), "Per hour | 63,000"), "not 1050 gained")
+end)
+
+test("experience the client cannot read yet is no baseline", function()
+    __boot({ pet = hunterPet({ current = 0, max = 0 }) })
+    __advance(60)
+    __pet.current, __pet.max = 340, 2150
+    __fire("UNIT_PET_EXPERIENCE", "pet")
+    assert_true(has_line(tooltip(), "Gathering experience rate..."), "the first readable experience counted as gained")
+    __pet.current = 840
+    __fire("UNIT_PET_EXPERIENCE", "pet")
+    assert_true(has_line(tooltip(), "Per hour | 30,000"), "gains after the baseline not counted")
+end)
+
+test("a pet back under a new GUID keeps its rate, and one that died mid-fight levels as usual", function()
+    __boot({ pet = hunterPet({ guid = "Pet-1" }) })
+    __advance(60)
+    __pet.current = 840
+    __fire("UNIT_PET_EXPERIENCE", "pet")
+    __pet = nil
+    __fire("UNIT_PET", "player")
+    __pet = hunterPet({ guid = "Pet-2", current = 840 })
+    __fire("UNIT_PET", "player")
+    assert_true(has_line(tooltip(), "Per hour | 30,000"), "a resummon under a new GUID started over")
+
+    __pet.dead = true
+    __fire("UNIT_HEALTH", "pet")
+    __advance(60)
+    __pet.dead = false
+    __fire("UNIT_HEALTH", "pet")
+    __advance(60)
+    __pet.level, __pet.current, __pet.max = 15, 190, 2500
+    __fire("UNIT_LEVEL", "pet")
+    assert_eq(#__sounds, 1, "no alert for the revived pet's level up")
+    -- 500 gained, then 1310 and 190 across the level, in two minutes out;
+    -- the minute dead does not count.
+    assert_true(has_line(tooltip(), "Per hour | 60,000"), "the death's time or the level not counted right")
 end)
 
 test("a drop, a resummon or a dismissal never count, and a different pet starts over", function()

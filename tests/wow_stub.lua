@@ -291,6 +291,13 @@ function methods:RegisterEvent(event)
     end
     self.__events[event] = true
 end
+-- Like the client's, the event reaches the frame only for the units named.
+function methods:RegisterUnitEvent(event, ...)
+    self:RegisterEvent(event)
+    local units = {}
+    for _, unit in ipairs({ ... }) do units[unit] = true end
+    self.__events[event] = units
+end
 function methods:UnregisterEvent(event) self.__events[event] = nil end
 function methods:UnregisterAllEvents() self.__events = {} end
 
@@ -634,12 +641,23 @@ function __script(widget, name, ...)
 end
 
 function __fire(event, ...)
+    local unit = ...
     for _, frame in ipairs(frames) do
-        if frame.__events[event] then
+        local registered = frame.__events[event]
+        if registered and (registered == true or registered[unit]) then
             local handler = frame.__scripts.OnEvent
             if handler then handler(frame, event, ...) end
         end
     end
+end
+
+-- The units a unit event was registered for, or nil for every unit.
+function __registeredUnits(event)
+    for _, frame in ipairs(frames) do
+        local registered = frame.__events[event]
+        if type(registered) == "table" then return registered end
+    end
+    return nil
 end
 
 function __registered(event)
