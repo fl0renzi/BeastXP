@@ -230,7 +230,8 @@ local pet = { present = false, current = 0, max = 0, level = nil, dead = false }
 -- same pet gaining experience or a level from another pet being summoned. All
 -- nil while no pet is out, so the first reading after a summon, a swap or a
 -- login only sets the baseline. Holds guid, name, level, current, max and mood;
--- stale, the old level's experience still read after a level up; and unsure,
+-- stale, the old level's size, whose experience may still be read after a
+-- level up; and unsure,
 -- set when the game says the pet changed and it is known by name alone.
 local seen = {}
 
@@ -559,14 +560,20 @@ local function FollowPet()
     -- known one sets the baseline.
     local current, max = pet.current, pet.max
     if not (max > 0) then current, max = nil, nil end
+    -- After UNIT_PET, experience of another size on the same level is the next
+    -- level's arriving first, and is no baseline to count that level from.
+    if same and not follow and max and seen.max and max ~= seen.max
+        and pet.level == seen.level then
+        current, max = nil, nil
+    end
 
     -- The game may report the new level and the new experience in separate
     -- events, in either order. Experience that drops, or a level's size that
     -- changes, on the same level is the new level's arriving first: the old
     -- reading is kept until the level follows. A level whose experience still
-    -- reads as the old level's counts the rest of the old level only. That
-    -- stale reading is then passed over until the new level's own arrives,
-    -- which counts in full.
+    -- reads as the old level's counts the rest of the old level only. Any
+    -- reading of the old level's size is then passed over, even one that has
+    -- moved, until the new level's own arrives, which counts in full.
     local leveled, stale = false, nil
     if follow then
         if pet.level > seen.level then
@@ -575,14 +582,14 @@ local function FollowPet()
                 session.gained = session.gained + (seen.max - seen.current)
             end
             if max and max == seen.max then
-                stale, current = current, 0
+                stale, current = max, 0
             elseif current and seen.max then
                 session.gained = session.gained + current
             end
         elseif pet.level == seen.level then
             if not current then return false, hungrier end
             if seen.stale then
-                if current == seen.stale and max == seen.max then return false, hungrier end
+                if max == seen.stale then return false, hungrier end
                 session.gained = session.gained + current
             elseif seen.current then
                 if current < seen.current or max ~= seen.max then return false, hungrier end
@@ -1141,8 +1148,13 @@ local function LevelUpAlert(test)
     local function Say()
         -- Read when the line is printed, for the pet that leveled: one
         -- dismissed or swapped meanwhile gets no line, and a second level
-        -- inside the cooldown is named in this one.
-        if not test and (not pet.present or PetNameOr(nil) ~= name or (PetIdentity()) ~= guid) then return end
+        -- inside the cooldown is named in this one. A GUID missing from
+        -- either reading leaves it to the name.
+        if not test then
+            local nowGuid = pet.present and PetIdentity() or nil
+            if not pet.present or PetNameOr(nil) ~= name
+                or (guid and nowGuid and guid ~= nowGuid) then return end
+        end
         local level = pet.level or 14
         if test then level = level + 1 end
         local points = pet.present and PetTrainingPoints() or (test and 5) or nil

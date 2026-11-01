@@ -1593,6 +1593,10 @@ test("a GUID the client gives only some of the time does not split the pet in tw
     __pet.guid, __pet.level = "Pet-1", 15
     __fire("UNIT_LEVEL", "pet")
     assert_eq(#__sounds, 1, "a level up lost when the GUID came and went")
+    -- Unreadable when the chat line is printed: the name decides.
+    __pet.guid = nil
+    __advance(1)
+    assert_true(__printed("Grimtooth reached level 15."), "the line lost with the GUID")
 end)
 
 test("the level up chat line is for the pet that leveled, at the level it reached", function()
@@ -1981,6 +1985,40 @@ test("the old level's experience read again after the level up is not counted tw
     __pet.current, __pet.max = 100, 2500
     __fire("UNIT_PET_EXPERIENCE", "pet")
     assert_true(has_line(tooltip(), "Per hour | 15,000"), "the stale reading counted again")
+end)
+
+test("an old level's reading that moves after the level up is not counted, nor stops the count", function()
+    __boot({ pet = hunterPet({ current = 2000 }) })
+    __advance(60)
+    __pet.level = 15
+    __fire("UNIT_LEVEL", "pet")
+    -- The old level's experience, read again having moved.
+    __pet.current = 2100
+    __fire("UNIT_HAPPINESS", "pet")
+    __pet.current, __pet.max = 100, 2500
+    __fire("UNIT_PET_EXPERIENCE", "pet")
+    __pet.current = 400
+    __fire("UNIT_PET_EXPERIENCE", "pet")
+    -- 150 to finish level 14, 100 into level 15, then 300 more.
+    assert_true(has_line(tooltip(), "Per hour | 33,000"), "not 550 gained")
+end)
+
+test("UNIT_PET between an experience-first reading and its level counts no extra", function()
+    __boot({ pet = hunterPet() })
+    __advance(60)
+    __pet.current = 840
+    __fire("UNIT_PET_EXPERIENCE", "pet")
+    __pet.current, __pet.max = 100, 2500
+    __fire("UNIT_PET_EXPERIENCE", "pet")
+    -- The game says the pet changed, though it has not.
+    __fire("UNIT_PET", "player")
+    __pet.level = 15
+    __fire("UNIT_LEVEL", "pet")
+    __pet.current = 400
+    __fire("UNIT_PET_EXPERIENCE", "pet")
+    -- 500 before, 300 after; the level between them is unknown, and is not
+    -- counted as the 2400 left of a level 15 read as level 14.
+    assert_true(has_line(tooltip(), "Per hour | 48,000"), "not 800 gained")
 end)
 
 test("an experience-first level up with more experience than before still counts in full", function()
