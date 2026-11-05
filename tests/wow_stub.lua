@@ -272,6 +272,7 @@ function methods:SetResizeBounds(minW, minH, maxW, maxH)
     self.__bounds = { minW, minH, maxW, maxH }
 end
 function methods:EnableMouse(enabled) self.__mouse = enabled end
+function methods:IsMouseEnabled() return self.__mouse == true end
 function methods:RegisterForDrag(button) self.__drag = button end
 function methods:StartMoving() self.__moving = true end
 function methods:StartSizing(corner) self.__sizing = corner end
@@ -669,6 +670,13 @@ end
 
 function __frame_count() return #frames end
 
+-- The level-up banner: the frame shown above the settings window.
+function __banner()
+    for _, widget in ipairs(frames) do
+        if widget.__kind == "Frame" and widget.__strata == "DIALOG" and widget.__shown then return widget end
+    end
+end
+
 --------------------------------------------------------------------------------
 -- Client globals
 --------------------------------------------------------------------------------
@@ -682,6 +690,30 @@ local function resetGlobals()
     GameFontNormal = { __font = { "Fonts\\FRIZQT__.TTF", 12, "" } }
     GameFontHighlightLarge = { __font = { "Fonts\\FRIZQT__.TTF", 16, "" } }
     GameFontHighlightHuge = { __font = { "Fonts\\FRIZQT__.TTF", 20, "" } }
+    GameFontHighlight = { __font = { "Fonts\\FRIZQT__.TTF", 12, "" } }
+    SystemFont_Shadow_Large = { __font = { "Fonts\\FRIZQT__.TTF", 16, "" } }
+    GameFont_Gigantic = { __font = { "Fonts\\FRIZQT__.TTF", 32, "" } }
+
+    -- The chat window lines go to, and the system message colour the game
+    -- prints the player's level up in. A line added is printed, so
+    -- __printed finds it; __chatColor holds each line's colour.
+    __chatColor = {}
+    ChatTypeInfo = { SYSTEM = { r = 1, g = 1, b = 0, id = 1 } }
+    DEFAULT_CHAT_FRAME = {}
+    function DEFAULT_CHAT_FRAME:AddMessage(text, r, g, b)
+        print(text)
+        __chatColor[text] = { r, g, b }
+    end
+
+    -- Atlases the client has, by name, as Forever reports its level-up art.
+    -- A test empties it to check the plain-colour fallback.
+    __atlases = {
+        ["levelup-bar-gold"] = { width = 418, height = 7 },
+        ["levelup-shadow-upper"] = { width = 418, height = 81 },
+    }
+    C_Texture = {
+        GetAtlasInfo = function(name) return __atlases[name:lower()] end,
+    }
 
     -- The client's settings window: a canvas category per addon, opened by
     -- its ID, which shows the canvas frame.

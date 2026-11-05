@@ -1514,8 +1514,10 @@ test("a level up plays the sound, flashes the bar and names the training points"
     assert_false(__printed("reached level"), "the chat line did not wait for the training points")
     __pet.training = { 15, 5 }
     __advance(0.5)
-    assert_true(__printed("Grimtooth reached level 15. You have 10 training points to spend."),
-        "no chat line, or stale training points")
+    assert_true(__printed("Grimtooth has reached level 15!"), "no chat line")
+    assert_true(__printed("Grimtooth has 10 training points to spend."), "no points line, or stale points")
+    assert_eq(__chatColor["Grimtooth has reached level 15!"][2], 1, "not in the system message colour")
+    assert_false(__printed("BeastXP: Grimtooth"), "labelled as BeastXP's")
 end)
 
 test("the flash fades in and out over a second, then stops", function()
@@ -1540,7 +1542,7 @@ test("the chat line leaves out training points when there are none", function()
     __pet.level = 15
     __fire("UNIT_LEVEL", "pet")
     __advance(1)
-    assert_true(__printed("Grimtooth reached level 15."), "no chat line")
+    assert_true(__printed("Grimtooth has reached level 15!"), "no chat line")
     assert_false(__printed("training point"), "zero training points named")
 end)
 
@@ -1596,7 +1598,7 @@ test("a GUID the client gives only some of the time does not split the pet in tw
     -- Unreadable when the chat line is printed: the name decides.
     __pet.guid = nil
     __advance(1)
-    assert_true(__printed("Grimtooth reached level 15."), "the line lost with the GUID")
+    assert_true(__printed("Grimtooth has reached level 15!"), "the line lost with the GUID")
 end)
 
 test("the level up chat line is for the pet that leveled, at the level it reached", function()
@@ -1625,7 +1627,7 @@ test("the level up chat line is for the pet that leveled, at the level it reache
     __pet.level = 16
     __fire("UNIT_LEVEL", "pet")
     __advance(1)
-    assert_true(__printed("Grimtooth reached level 16."), "the second level was not named")
+    assert_true(__printed("Grimtooth has reached level 16!"), "the second level was not named")
     assert_false(__printed("reached level 15"), "a stale level named")
 end)
 
@@ -1648,16 +1650,21 @@ test("each part of the alert turns off on its own", function()
     assert_true(__printed("level-up sound off"), "no confirmation")
     SlashCmdList.BEASTXP("levelalert flash off")
     SlashCmdList.BEASTXP("alert chat off")
-    assert_false(BeastXPDB.alertSound or BeastXPDB.alertFlash or BeastXPDB.alertChat, "a part stayed on")
+    SlashCmdList.BEASTXP("levelalert banner off")
+    assert_false(BeastXPDB.alertSound or BeastXPDB.alertFlash or BeastXPDB.alertChat or BeastXPDB.alertBanner,
+        "a part stayed on")
     __pet.level = 15
     __fire("UNIT_LEVEL", "pet")
     __advance(1)
     assert_eq(#__sounds, 0, "sound played")
     assert_false(BeastXPBar.flasher:IsShown(), "flashed")
     assert_false(__printed("reached level"), "chat line printed")
+    assert_false(__banner(), "banner shown")
 
     SlashCmdList.BEASTXP("levelalert loud on")
-    assert_true(__printed("use /petxp levelalert sound, flash or chat"), "no usage for a bad part")
+    assert_true(__printed("use /petxp levelalert sound, flash, chat or banner"), "no usage for a bad part")
+    SlashCmdList.BEASTXP("feedalert banner on")
+    assert_true(__printed("use /petxp feedalert sound, flash or chat with"), "the feed reminder took a banner")
 end)
 
 test("a locked bar still flashes, and a test alert plays every part that is on", function()
@@ -1666,13 +1673,15 @@ test("a locked bar still flashes, and a test alert plays every part that is on",
     assert_eq(#__sounds, 1, "no test sound")
     assert_true(BeastXPBar.flasher:IsShown(), "a locked bar did not flash")
     __advance(1)
-    assert_true(__printed("Grimtooth reached level 15. You have 3 training points to spend."), "no test chat line")
+    assert_true(__printed("Grimtooth has reached level 15!"), "no test chat line")
+    assert_true(__printed("Grimtooth has 3 training points to spend."), "no test points line")
 
     -- No pet and a locked bar: nothing to flash, and a sample pet in chat.
     __boot({ db = { locked = true } })
     SlashCmdList.BEASTXP("levelalert test")
     __advance(1)
-    assert_true(__printed("Your pet reached level 15. You have 5 training points to spend."), "no sample line")
+    assert_true(__printed("Your pet has reached level 15!"), "no sample line")
+    assert_true(__printed("Your pet has 5 training points to spend."), "no sample points line")
 end)
 
 test("the settings page and the menu set up the alert", function()
@@ -1698,12 +1707,120 @@ test("the settings page and the menu set up the alert", function()
     assert_false(__control("Level-up message", "UICheckButtonTemplate"):GetChecked(), "page not in step")
 end)
 
+test("a level up shows a banner with the pet's name, its new level and its training points", function()
+    __boot({ pet = hunterPet({ training = { 12, 5 } }) })
+    __pet.level = 15
+    __fire("UNIT_LEVEL", "pet")
+    assert_false(__banner(), "the banner did not wait for the training points")
+    __advance(0.5)
+    local banner = __banner()
+    assert_true(banner, "no banner")
+    assert_eq(banner.name:GetText(), "Grimtooth has reached")
+    assert_eq(banner.level:GetText(), "Level 15")
+    assert_eq(banner.points:GetText(), "7 training points to spend")
+    assert_eq(banner.lines[1].__atlas, "levelup-bar-gold", "not the game's level-up art")
+    assert_false(banner:IsMouseEnabled(), "the banner blocks clicks")
+
+    -- The lines grow out over half a second, the text follows, and the whole
+    -- fades over the last second.
+    assert_eq(banner.level:GetAlpha(), 0, "text shown before the lines")
+    __script(banner, "OnUpdate", 0.25)
+    assert_true(math.abs(banner.lines[1]:GetWidth() - 209) < 0.001, "the lines are not growing")
+    __script(banner, "OnUpdate", 0.75)
+    assert_eq(banner.lines[2]:GetWidth(), 418)
+    assert_eq(banner.level:GetAlpha(), 1, "the text did not come in")
+    assert_eq(banner:GetAlpha(), 1)
+    __script(banner, "OnUpdate", 3)
+    assert_true(math.abs(banner:GetAlpha() - 0.5) < 0.001, "not fading out")
+    __script(banner, "OnUpdate", 0.5)
+    assert_false(banner:IsShown(), "the banner stayed")
+end)
+
+test("the banner leaves out training points when there are none, and can be turned off", function()
+    __boot({ pet = hunterPet({ training = { 5, 5 } }) })
+    __pet.level = 15
+    __fire("UNIT_LEVEL", "pet")
+    __advance(1)
+    assert_eq(__banner().points:GetText(), "", "zero training points named")
+
+    __boot({ pet = hunterPet(), db = { alertBanner = false } })
+    __pet.level = 15
+    __fire("UNIT_LEVEL", "pet")
+    __advance(1)
+    assert_false(__banner(), "a banner that is off")
+    assert_true(__printed("Grimtooth has reached level 15!"), "the chat line went with the banner")
+
+    -- The banner alone still waits and shows, with the chat line off.
+    __boot({ pet = hunterPet(), db = { alertChat = false } })
+    __pet.level = 15
+    __fire("UNIT_LEVEL", "pet")
+    __advance(1)
+    assert_true(__banner(), "no banner without the chat line")
+    assert_false(__printed("reached level"), "a chat line that is off")
+end)
+
+test("the banner is drawn in plain colours on a client without the level-up art", function()
+    __boot({ pet = hunterPet() })
+    __atlases = {}
+    SlashCmdList.BEASTXP("levelalert test")
+    __advance(1)
+    local banner = __banner()
+    assert_true(banner, "no banner")
+    assert_eq(banner.lines[1].__atlas, nil, "art the client does not have")
+    assert_true(banner.lines[1].__color, "no plain line")
+end)
+
+test("the banner has its own switch on the settings page, in the menu and as a command", function()
+    __boot({ pet = hunterPet() })
+    open_page()
+    local box = __control("Level-up banner", "UICheckButtonTemplate")
+    assert_true(box:GetChecked(), "banner off for a fresh install")
+    box:SetChecked(false)
+    __script(box, "OnClick")
+    assert_false(BeastXPDB.alertBanner, "the box did not turn the banner off")
+
+    __script(BeastXPBar, "OnMouseUp", "RightButton")
+    local item = __menu_item("Level-up alert", "Banner")
+    assert_true(item, "no Banner in the Level-up alert menu")
+    assert_false(__menu_item("Feed reminder", "Banner"), "a Banner in the Feed reminder menu")
+    __menu_click(item)
+    assert_true(BeastXPDB.alertBanner, "the menu did not turn the banner on")
+    assert_true(box:GetChecked(), "page not in step with the menu")
+
+    SlashCmdList.BEASTXP("levelalert banner off")
+    assert_true(__printed("level-up banner off"), "no confirmation")
+    assert_false(box:GetChecked(), "page not in step with the command")
+
+    -- Settings saved before the banner existed turn it on.
+    __boot({ pet = hunterPet(), db = { alertChat = false } })
+    assert_eq(BeastXPDB.alertBanner, true, "an upgrade left the banner unset")
+end)
+
 --------------------------------------------------------------------------------
 -- Feed reminder
 --------------------------------------------------------------------------------
 
-test("a drop in happiness plays the feed reminder, in the new mood's colour", function()
+-- The feed reminder is off for a fresh install; these tests turn it on.
+local function FEED_ON()
+    return { feedSound = true, feedFlash = true, feedChat = true }
+end
+
+test("the feed reminder is off for a fresh install", function()
     __boot({ pet = hunterPet() })
+    assert_false(BeastXPDB.feedSound or BeastXPDB.feedFlash or BeastXPDB.feedChat, "a part on")
+    __pet.happiness = 2
+    __fire("UNIT_HAPPINESS", "pet")
+    assert_eq(#__sounds, 0, "a sound")
+    assert_false(BeastXPBar.flasher:IsShown(), "a flash")
+    assert_false(__printed("is now"), "a chat line")
+    open_page()
+    assert_false(__control("Feed sound", "UICheckButtonTemplate"):GetChecked(), "page shows it on")
+    SlashCmdList.BEASTXP("feedalert sound on")
+    assert_true(BeastXPDB.feedSound, "the command did not turn it on")
+end)
+
+test("a drop in happiness plays the feed reminder, in the new mood's colour", function()
+    __boot({ pet = hunterPet(), db = FEED_ON() })
     __pet.happiness = 2
     __fire("UNIT_HAPPINESS", "pet")
     assert_eq(__sounds[1], 3081, "no feed sound")
@@ -1731,7 +1848,7 @@ test("a drop in happiness plays the feed reminder, in the new mood's colour", fu
 end)
 
 test("a summon, a swap, a login, a revival or an unknown mood never raise a feed reminder", function()
-    __boot({ pet = hunterPet({ happiness = 1 }) })
+    __boot({ pet = hunterPet({ happiness = 1 }), db = FEED_ON() })
     __pet = nil
     __fire("UNIT_PET", "player")
     __pet = hunterPet({ name = "Claw", happiness = 3 })
@@ -1752,7 +1869,7 @@ test("a summon, a swap, a login, a revival or an unknown mood never raise a feed
 end)
 
 test("a mood the client does not report keeps the last one, so a drop across it still reminds", function()
-    __boot({ pet = hunterPet({ happiness = 3 }) })
+    __boot({ pet = hunterPet({ happiness = 3 }), db = FEED_ON() })
     __pet.happiness = __secret()
     __fire("UNIT_HAPPINESS", "pet")
     assert_eq(#__sounds, 0, "a reminder for an unknown mood")
@@ -1761,14 +1878,14 @@ test("a mood the client does not report keeps the last one, so a drop across it 
     assert_eq(#__sounds, 1, "the unknown mood replaced the last one")
 
     -- A summon with an unknown mood, then a known one: only a baseline.
-    __boot({ pet = hunterPet({ happiness = __secret() }) })
+    __boot({ pet = hunterPet({ happiness = __secret() }), db = FEED_ON() })
     __pet.happiness = 1
     __fire("UNIT_HAPPINESS", "pet")
     assert_eq(#__sounds, 0, "the first known mood after a summon was taken for a drop")
 end)
 
 test("each part of the feed reminder turns off, and tests come from the menu, the page and the command", function()
-    __boot({ pet = hunterPet() })
+    __boot({ pet = hunterPet(), db = FEED_ON() })
     SlashCmdList.BEASTXP("feedalert sound off")
     assert_true(__printed("feed reminder sound off"), "no confirmation")
     SlashCmdList.BEASTXP("feed chat off")
@@ -1780,7 +1897,7 @@ test("each part of the feed reminder turns off, and tests come from the menu, th
     SlashCmdList.BEASTXP("feedalert loud on")
     assert_true(__printed("use /petxp feedalert sound"), "no usage for a bad part")
 
-    __boot({ pet = hunterPet({ happiness = 1 }) })
+    __boot({ pet = hunterPet({ happiness = 1 }), db = FEED_ON() })
     SlashCmdList.BEASTXP("feedalert test")
     assert_true(__printed("Grimtooth is now Unhappy."), "the test did not use the pet's mood")
     __script(BeastXPBar, "OnMouseUp", "RightButton")
@@ -1791,9 +1908,9 @@ test("each part of the feed reminder turns off, and tests come from the menu, th
     __menu_click(__menu_item("Feed reminder", "Test reminder"))
     assert_eq(#__sounds, 2, "the menu's test did not play")
 
-    __boot({})
+    __boot({ db = FEED_ON() })
     open_page()
-    assert_true(__control("Feed sound", "UICheckButtonTemplate"):GetChecked(), "feed sound off for a fresh install")
+    assert_true(__control("Feed sound", "UICheckButtonTemplate"):GetChecked(), "the saved feed sound not shown")
     __script(__page_button("Test reminder"), "OnClick")
     assert_true(__printed("Your pet is now Content."), "no sample reminder")
     local preview = __control("Preview", nil, "Frame")

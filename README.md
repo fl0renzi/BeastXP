@@ -8,8 +8,8 @@ example `Level 14   340 / 2150  (15%)`. Hover it for the pet's name, the experie
 needs, its experience per hour and the time to its next level, its loyalty rank (and whether it is
 gaining or losing loyalty), its happiness and its unspent training points, unless you turn the
 tooltip off. When the pet gains a level, the bar flashes, the game's level up sound plays and a line
-in chat says how many training points it has to spend. When its happiness drops, a feed reminder
-does the same in the new mood's color.
+in chat says how many training points it has to spend. When its happiness drops, a feed reminder,
+once you turn it on, does the same in the new mood's color.
 
 ## Settings page
 
@@ -28,8 +28,8 @@ QuestForever lay out theirs:
   slider and *Outline*.
 - **Tooltip and session**: *Experience rate* and *Reset session*.
 - **Alerts and colors**: *Color by happiness*, *Preview mood* (shows the preview in each mood's
-  color; the bar is not touched), *Level-up sound*, *Level-up flash*, *Level-up message*, and
-  *Test alert*, which plays the alert on the bar and on the preview; then *Feed sound*, *Feed
+  color; the bar is not touched), *Level-up sound*, *Level-up flash*, *Level-up message*,
+  *Level-up banner* and *Test alert*, which plays the alert on the bar and on the preview; then *Feed sound*, *Feed
   flash*, *Feed message* and *Test reminder* for the feed reminder.
 - **Fade**: *Fade out of combat* and a *Faded opacity* slider.
 - **Defaults** (top right) puts every setting back to how a fresh install has it, but leaves the bar
@@ -77,16 +77,19 @@ The bar starts **unlocked** on a fresh install, so you can put it where you want
   leave it out, or use *Reset session* on the settings page to start it over. It is left out at the
   level cap.
 - **Level-up alert**: when the same pet goes up a level, the game's level up sound plays, the bar
-  flashes white for a second and a line in chat says, for example, `Grimtooth reached level 15. You
-  have 5 training points to spend.` The second sentence is left out when there are none. Summoning,
-  swapping or logging in never raises one. Turn each part off under *Level-up alert* in the
-  right-click menu, which also has *Test alert*. All three are on for a fresh install.
+  flashes white for a second, and chat says, in the same yellow as the game's line for your own
+  level up, `Grimtooth has reached level 15!` and then `Grimtooth has 5 training points to spend.`
+  The second line is left out when there are none. A banner near the top of the screen shows the
+  same for a few seconds: the pet's name over *Level 15* in large gold letters between two gold
+  lines, in the art of the game's level-up banner. Summoning, swapping or logging in never raises
+  one. Turn each part off under *Level-up alert* in the right-click menu, which also has *Test
+  alert*. All four are on for a fresh install.
 - **Feed reminder**: when the pet's happiness drops, from Happy to Content or from Content to
   Unhappy, a short sound plays, the bar flashes in the new mood's color and a line in chat says, for
   example, `Grimtooth is now Content. Feed it to keep it Happy.` A summon, a swap, a login or a
   revival only notes the mood, and feeding it back up says nothing. Turn each part off under *Feed
-  reminder* in the right-click menu, which also has *Test reminder*. All three are on for a fresh
-  install.
+  reminder* in the right-click menu, which also has *Test reminder*. All three are off for a fresh
+  install, so tick the ones you want.
 - **Fade**: tick *Fade out of combat* in the right-click menu and the bar fades to the faded opacity
   (40% for a fresh install, set on the settings page or with `/petxp fade <percent>`) while you are
   out of combat. It comes back to full in combat, under the mouse, while it is dragged or resized,
@@ -119,7 +122,7 @@ found by its name or any part of it:
 /petxp color              opens the color picker
 /petxp color <color>      purple | blue | green | reset | a hex code like 33aaff
 /petxp happycolor on | off  green, yellow or red by the pet's happiness
-/petxp levelalert sound | flash | chat on | off   (alert works too)
+/petxp levelalert sound | flash | chat | banner on | off   (alert works too)
 /petxp levelalert test
 /petxp feedalert sound | flash | chat on | off   (feed works too)
 /petxp feedalert test
@@ -163,8 +166,8 @@ Install it from CurseForge, or copy `BeastXP.toc`, `BeastXP.lua` and `BeastXP_Op
   SavedVariables file but never loads it back. Every setting applies immediately, with no reload.
 - Event-driven: the bar refreshes on `UNIT_PET`, `UNIT_PET_EXPERIENCE`, `UNIT_LEVEL`,
   `PET_UI_UPDATE`, `PLAYER_XP_UPDATE` and `PLAYER_ENTERING_WORLD`, never from `OnUpdate`. The two
-  exceptions are a drag in Edit Mode, where the X and Y follow the bar until it is let go, and the
-  one-second alert flash.
+  exceptions are a drag in Edit Mode, where the X and Y follow the bar until it is let go, the
+  one-second alert flash and the level-up banner, each only while it runs.
 - `UNIT_HAPPINESS` and `UNIT_PET_TRAINING_POINTS` keep loyalty, happiness and training points
   current, on the bar and in an open tooltip.
 - Each reading of the pet is compared with the last, so a summon or a swap is never taken for a

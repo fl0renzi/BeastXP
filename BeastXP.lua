@@ -8,7 +8,7 @@
 --
 -- Cost: the bar is built the first time there is something to show, and it is
 -- refreshed from the pet events only, never from OnUpdate; only the second-long
--- alert flash runs on one, while it plays. A character that is not a hunter
+-- alert flash and the level-up banner run on one, while they play. A character that is not a hunter
 -- unregisters everything at login and pays nothing after that.
 
 local addonName, ns = ...
@@ -202,10 +202,12 @@ local DEFAULTS = {
     alertSound   = true,
     alertFlash   = true,
     alertChat    = true,
+    alertBanner  = true,
     -- What the pet's mood dropping does: Happy to Content, Content to Unhappy.
-    feedSound    = true,
-    feedFlash    = true,
-    feedChat     = true,
+    -- Off until the player turns it on.
+    feedSound    = false,
+    feedFlash    = false,
+    feedChat     = false,
     -- Fading the bar while out of combat, and how far, in percent.
     fadeOutOfCombat = false,
     fadeOpacity  = 40,
@@ -1099,7 +1101,7 @@ end
 -- the slash command, plays every part that is on, whatever the cooldown,
 -- for the pet that is out, or a sample one.
 local ALERTS = {
-    level = { sound = "alertSound", flash = "alertFlash", chat = "alertChat" },
+    level = { sound = "alertSound", flash = "alertFlash", chat = "alertChat", banner = "alertBanner" },
     feed  = { sound = "feedSound",  flash = "feedFlash",  chat = "feedChat" },
 }
 local lastAlert = {} -- when each alert last played
@@ -1110,12 +1112,27 @@ local function PetNameOr(fallback)
     return name
 end
 
-local function LevelUpText(name, level, points)
-    local text = ("%s reached level %d."):format(name, level)
-    if points and points > 0 then
-        text = text .. (" You have %d training point%s to spend."):format(points, points == 1 and "" or "s")
+-- The level-up line, and the training points line when there are any to
+-- spend, worded like the game's own lines for the player's level up.
+local function LevelUpText(name, level)
+    return ("%s has reached level %d!"):format(name, level)
+end
+
+local function TrainingText(name, points)
+    if not (points and points > 0) then return nil end
+    return ("%s has %d training point%s to spend."):format(name, points, points == 1 and "" or "s")
+end
+
+-- A line in chat the way the game prints the player's level up: in the
+-- system message colour, with no BeastXP label.
+local function SayAsGame(text)
+    local frame = DEFAULT_CHAT_FRAME
+    local info = type(ChatTypeInfo) == "table" and ChatTypeInfo.SYSTEM
+    if frame and frame.AddMessage and type(info) == "table" then
+        frame:AddMessage(text, info.r, info.g, info.b, info.id)
+    else
+        Print(text)
     end
-    return text
 end
 
 local function FeedText(name, mood)
@@ -1139,9 +1156,114 @@ local function PlayAlert(kind, test, sound, color)
     return true
 end
 
+-- The level-up banner: the pet's name over its new level in large gold
+-- letters, between two gold lines, near the top of the screen, made from
+-- the art of the game's level-up banner on later clients, which Forever has
+-- but does not show. It is BeastXP's own frame, shown for BANNER_TIME
+-- seconds: the lines grow out from the middle over BANNER_GROW, the text
+-- follows, and the whole fades over the last BANNER_FADE. Its OnUpdate runs
+-- only while it shows. Art the client does not have is drawn in plain
+-- colours instead.
+local BANNER_WIDTH, BANNER_HEIGHT = 418, 88
+local BANNER_TIME, BANNER_GROW, BANNER_FADE = 4.5, 0.5, 1
+
+local banner -- built the first time a banner shows
+
+local function HasAtlas(name)
+    local textures = C_Texture
+    if not (textures and textures.GetAtlasInfo) then return false end
+    return type(SafeValue(textures.GetAtlasInfo(name))) == "table"
+end
+
+local function BannerFont(text, name, fallback)
+    text:SetFontObject(_G[name] or fallback)
+end
+
+local function BannerLine(frame, point)
+    local line = frame:CreateTexture(nil, "ARTWORK")
+    if HasAtlas("levelup-bar-gold") then
+        line:SetAtlas("levelup-bar-gold")
+        line:SetHeight(7)
+    else
+        line:SetColorTexture(1, 0.82, 0, 0.9)
+        line:SetHeight(2)
+    end
+    line:SetPoint(point)
+    return line
+end
+
+local function EnsureBanner()
+    if banner then return banner end
+    local frame = CreateFrame("Frame", nil, UIParent)
+    frame:SetSize(BANNER_WIDTH, BANNER_HEIGHT)
+    frame:SetPoint("TOP", UIParent, "TOP", 0, -190)
+    -- Above the settings window, so its test shows there too.
+    frame:SetFrameStrata("DIALOG")
+    frame:EnableMouse(false)
+    frame:Hide()
+
+    local shade = frame:CreateTexture(nil, "BACKGROUND")
+    shade:SetAllPoints()
+    if HasAtlas("levelup-shadow-upper") then
+        shade:SetAtlas("levelup-shadow-upper")
+    else
+        shade:SetColorTexture(0, 0, 0, 1)
+    end
+    shade:SetAlpha(0.6)
+    frame.lines = { BannerLine(frame, "TOP"), BannerLine(frame, "BOTTOM") }
+
+    frame.name = frame:CreateFontString(nil, "OVERLAY")
+    BannerFont(frame.name, "SystemFont_Shadow_Large", GameFontHighlightLarge)
+    frame.name:SetPoint("TOP", frame, "TOP", 0, -12)
+    frame.name:SetTextColor(1, 1, 1)
+    frame.level = frame:CreateFontString(nil, "OVERLAY")
+    BannerFont(frame.level, "GameFont_Gigantic", GameFontHighlightHuge)
+    frame.level:SetPoint("TOP", frame.name, "BOTTOM", 0, -4)
+    frame.level:SetTextColor(1, 0.82, 0)
+    frame.points = frame:CreateFontString(nil, "OVERLAY")
+    BannerFont(frame.points, "GameFontHighlight", GameFontNormal)
+    frame.points:SetPoint("TOP", frame.level, "BOTTOM", 0, -4)
+    frame.points:SetTextColor(1, 1, 1)
+
+    frame:SetScript("OnUpdate", function(self, elapsed)
+        self.time = self.time + elapsed
+        local time = self.time
+        if time >= BANNER_TIME then
+            self:Hide()
+            return
+        end
+        local grown = Clamp(time / BANNER_GROW, 0, 1)
+        for _, line in ipairs(self.lines) do line:SetWidth(math.max(BANNER_WIDTH * grown, 1)) end
+        local text = Clamp((time - BANNER_GROW / 2) / BANNER_GROW, 0, 1)
+        self.name:SetAlpha(text)
+        self.level:SetAlpha(text)
+        self.points:SetAlpha(text)
+        self:SetAlpha(Clamp((BANNER_TIME - time) / BANNER_FADE, 0, 1))
+    end)
+    banner = frame
+    return frame
+end
+
+-- Shows the banner from the start, for the pet and level given. points is
+-- the training points to spend, left out when there are none.
+local function ShowBanner(name, level, points)
+    local frame = EnsureBanner()
+    frame.name:SetText(("%s has reached"):format(name))
+    frame.level:SetText(("Level %d"):format(level))
+    frame.points:SetText(points and points > 0
+        and ("%d training point%s to spend"):format(points, points == 1 and "" or "s") or "")
+    frame.time = 0
+    frame:SetAlpha(1)
+    for _, line in ipairs(frame.lines) do line:SetWidth(1) end
+    frame.name:SetAlpha(0)
+    frame.level:SetAlpha(0)
+    frame.points:SetAlpha(0)
+    frame:Show()
+end
+
 local function LevelUpAlert(test)
     if not PlayAlert("level", test, LEVEL_UP_SOUND) then return end
-    if not db.alertChat then return end
+    if not (db.alertChat or db.alertBanner) then return end
 
     local name = PetNameOr("Your pet")
     local guid = pet.present and PetIdentity() or nil
@@ -1158,7 +1280,12 @@ local function LevelUpAlert(test)
         local level = pet.level or 14
         if test then level = level + 1 end
         local points = pet.present and PetTrainingPoints() or (test and 5) or nil
-        Print(LevelUpText(name, level, points))
+        if db.alertChat then
+            SayAsGame(LevelUpText(name, level))
+            local training = TrainingText(name, points)
+            if training then SayAsGame(training) end
+        end
+        if db.alertBanner then ShowBanner(name, level, points) end
     end
     if C_Timer and C_Timer.After then C_Timer.After(ALERT_DELAY, Say) else Say() end
 end
@@ -1522,20 +1649,24 @@ local function OpenSettings()
     end
 end
 
--- A submenu with an alert's three parts and its test.
+-- A submenu with an alert's parts and its test. The banner is the level-up
+-- alert's only.
 local ALERT_PARTS = {
-    { key = "sound", name = "Sound" },
-    { key = "flash", name = "Flash" },
-    { key = "chat",  name = "Chat message" },
+    { key = "sound",  name = "Sound" },
+    { key = "flash",  name = "Flash" },
+    { key = "chat",   name = "Chat message" },
+    { key = "banner", name = "Banner" },
 }
 
 local function AddAlertMenu(root, title, kind, testName, test)
     local submenu = root:CreateButton(title)
     for _, part in ipairs(ALERT_PARTS) do
         local key = ALERTS[kind][part.key]
-        submenu:CreateCheckbox(part.name,
-            function() return db[key] end,
-            function() SetAlert(kind, part.key, not db[key]) end)
+        if key then
+            submenu:CreateCheckbox(part.name,
+                function() return db[key] end,
+                function() SetAlert(kind, part.key, not db[key]) end)
+        end
     end
     submenu:CreateDivider()
     submenu:CreateButton(testName, test)
@@ -1641,7 +1772,7 @@ local HELP = {
     "/petxp texture <name> - for example blizzard, solid or a LibSharedMedia texture",
     "/petxp color - pick the bar color, or give purple | blue | green | a hex code like 33aaff",
     "/petxp happycolor on | off - color the bar by happiness: green, yellow or red",
-    "/petxp levelalert sound | flash | chat on | off - what a level up does",
+    "/petxp levelalert sound | flash | chat | banner on | off - what a level up does",
     "/petxp levelalert test - play the level-up alert",
     "/petxp feedalert sound | flash | chat on | off - the reminder when your pet's happiness drops",
     "/petxp feedalert test - play the feed reminder",
@@ -1790,8 +1921,9 @@ SlashCmdList["BEASTXP"] = function(msg)
             SetAlert(kind, part, state == "on")
             Print(("%s %s %s."):format(title, part, state))
         else
-            Print(("use /petxp %s sound, flash or chat with on or off, or /petxp %s test.")
-                :format(kind == "feed" and "feedalert" or "levelalert", kind == "feed" and "feedalert" or "levelalert"))
+            local command = kind == "feed" and "feedalert" or "levelalert"
+            local parts = kind == "feed" and "sound, flash or chat" or "sound, flash, chat or banner"
+            Print(("use /petxp %s %s with on or off, or /petxp %s test."):format(command, parts, command))
         end
     elseif command == "fade" then
         local percent = tonumber(word:match("^(%d+)%%?$") or "")
